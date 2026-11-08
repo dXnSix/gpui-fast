@@ -15,4 +15,5 @@ pub(crate) mod gles;
 pub(crate) mod globals;
 pub(crate) mod layers;
 pub(crate) mod pass_state;
+pub(crate) mod pipeline_cache;
 pub(crate) mod rounded_clip;

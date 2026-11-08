@@ -758,6 +758,7 @@ impl WgpuRendererCore {
             write_mask: wgpu::ColorWrites::ALL,
         };
 
+        let fast_pipeline_cache = crate::fast::pipeline_cache::get(device);
         let create_pipeline = |name: &str,
                                vs_entry: &str,
                                fs_entry: &str,
@@ -808,7 +809,7 @@ impl WgpuRendererCore {
                     alpha_to_coverage_enabled: false,
                 },
                 multiview_mask: None,
-                cache: None,
+                cache: Option::as_ref(&fast_pipeline_cache),
             })
         };
 
@@ -958,6 +959,7 @@ impl WgpuRendererCore {
             &shader_module,
         );
 
+        crate::fast::pipeline_cache::store(device);
         WgpuPipelines {
             quads,
             shadows,
