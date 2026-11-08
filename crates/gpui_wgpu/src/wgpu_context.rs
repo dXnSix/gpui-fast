@@ -457,6 +457,7 @@ impl WgpuContext {
         let required_limits = wgpu::Limits::downlevel_defaults()
             .using_resolution(adapter.limits())
             .using_alignment(adapter.limits());
+        let required_limits = crate::fast::gles::required_limits(adapter, required_limits);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -691,6 +692,9 @@ impl WgpuContext {
         let required_usages = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let bgra_features = adapter.get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm);
         let rgba_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);
+        if let Some(format) = crate::fast::gles::atlas_format(adapter) {
+            return Ok(format);
+        }
         #[cfg(target_family = "wasm")]
         if adapter.get_info().backend == wgpu::Backend::Gl
             && rgba_features.allowed_usages.contains(required_usages)
@@ -730,7 +734,7 @@ impl WgpuContext {
     }
 
     pub fn uses_webgl_instance_data(&self) -> bool {
-        matches!(self.backend, WgpuBackend::Gl) && cfg!(target_family = "wasm")
+        crate::fast::gles::uses_instance_textures(&self.adapter)
     }
 
     pub fn supports_dual_source_blending(&self) -> bool {
