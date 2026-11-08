@@ -3,6 +3,8 @@
 
 use super::{assert_same_pixels, pixel};
 
+// The fixtures run a second time here, against the instance-texture renderer.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../../gpui/src/fast/rounded_clip_fixtures.rs"]
 mod fixtures;
 
