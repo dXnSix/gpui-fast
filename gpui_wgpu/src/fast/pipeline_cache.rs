@@ -38,8 +38,10 @@ pub(crate) fn features(adapter: &wgpu::Adapter) -> wgpu::Features {
     }
 }
 
-/// Creates the device's cache from the file on disk, when the device has the feature.
+/// Creates the device's cache from the file on disk, when the device has the feature. A previous
+/// device's cache is dropped first, whether or not this one gets a cache.
 pub(crate) fn open(adapter: &wgpu::Adapter, device: &wgpu::Device) {
+    *CURRENT.lock().unwrap_or_else(PoisonError::into_inner) = None;
     let Some(path) = cache_file(
         device.features().contains(wgpu::Features::PIPELINE_CACHE),
         wgpu::util::pipeline_cache_key(&adapter.get_info()),
