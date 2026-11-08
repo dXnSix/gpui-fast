@@ -442,6 +442,7 @@ impl WgpuContext {
             );
         }
 
+        required_features |= crate::fast::pipeline_cache::features(adapter);
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
         #[cfg(target_family = "wasm")]
         let required_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
@@ -470,6 +471,7 @@ impl WgpuContext {
             })
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create wgpu device: {e}"))?;
+        crate::fast::pipeline_cache::open(adapter, &device);
 
         Ok((
             device,
