@@ -63,8 +63,6 @@ pub(crate) struct FrameState {
     pub(crate) bind_groups: BindGroupCache,
     pub(crate) globals: UploadedGlobals,
     pub(crate) layers: TileCache,
-    /// The window's damage from frame to frame, for partial redraws.
-    pub(crate) damage: crate::fast::damage::DamageTracker,
     /// Set for a partial frame: the frame's texture keeps its contents
     /// (`LoadOp::Load`) and the main passes draw only inside this rectangle.
     pub(crate) partial: Option<Bounds<DevicePixels>>,

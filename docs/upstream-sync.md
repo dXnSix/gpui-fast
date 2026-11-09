@@ -142,18 +142,21 @@ unchanged, and a new entry needs as good a reason.
   in `fast::rounded_clip_scene`; Metal, WGPU and Direct3D evaluate the clip
   stack directly without intermediate render targets.
 - `crates/gpui/Cargo.toml` names this repository and sets `publish = false`.
-- `gpui_wgpu` exports `WgpuExternalRenderer` (`fast::external_target`), a
-  second exception beside `fast::dynamic_textures` (on `main`): a renderer on a wgpu
-  instance, adapter, device and queue the caller created (one over a GL
-  context a platform owns, through `wgpu_hal::gles::Adapter::new_external`),
-  with `new`, `sprite_atlas`, `invalidate`, and `draw`, which draws a scene
-  into a texture view the caller supplies for that frame, Y-flipped for a GL
-  default framebuffer, and returns the frame's damage. No `wgpu::Surface` is
-  created or presented. Given the target's age (`EGL_EXT_buffer_age`), a
-  frame loads the target and redraws only inside the bounding rectangle of the
-  last frames' damage, computed by `fast::damage`. Platforms that own their
-  EGL surface need it for partial presents (`EGL_KHR_partial_update`,
-  `eglSwapBuffersWithDamage`); `WgpuRenderer::new` stays the path for
+- `gpui_wgpu` exports `WgpuExternalRenderer` and `WgpuFrameDamage`
+  (`fast::external_target`), a second exception beside
+  `fast::dynamic_textures` (on `main`): a renderer on a wgpu instance, adapter, device and
+  queue the caller created (one over a GL context a platform owns, through
+  `wgpu_hal::gles::Adapter::new_external`). `new` builds it, `draw` draws a
+  scene into a texture view the caller supplies for that frame (Y-flipped for
+  a GL default framebuffer, through a texture the renderer keeps) and hands
+  the frame's damage to a callback before drawing and back after, in the
+  target's coordinates; `sprite_atlas` gives the platform window its atlas,
+  and `invalidate` makes the next frame whole. No `wgpu::Surface` is created
+  or presented. Given the target's age (`EGL_EXT_buffer_age`), a frame loads
+  the target, clears the bounding rectangle of the last frames' damage
+  (computed by `fast::damage`) and redraws only inside it. Platforms that own
+  their EGL surface need it for partial presents (`EGL_KHR_partial_update`,
+  `eglSwapBuffersWithDamageKHR`); `WgpuRenderer::new` stays the path for
   everyone else. `WgpuContext::from_native_adapter_and_device` and
   `select_color_texture_format` are `pub(crate)` for it.
 - Window composition, the API of

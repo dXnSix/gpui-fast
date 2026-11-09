@@ -16,10 +16,12 @@
 //! whole window is damaged on the first frame, after a resize, after
 //! [`DamageTracker::invalidate`] (scale change, atlas loss, device recovery),
 //! when the scenes differ by more than [`MAX_EDITS`] primitives, or always
-//! with `GPUI_PARTIAL_REDRAW=0`. Primitives whose pixels can change while
-//! their description does not are damaged every frame: surfaces, scroll-layer
-//! tiles the layer marks dirty, and sprites with a non-identity transform cover
-//! the whole window.
+//! with `GPUI_PARTIAL_REDRAW=0`. Surfaces, whose pixels change while their
+//! description does not, are damaged every frame; scroll-layer tiles change
+//! with their layer's generation, rounded clip groups with their content and
+//! geometry; sprites with a non-identity transform cover the whole window.
+//! More than [`MAX_MERGED_AREAS`] changed areas become one rectangle.
+
 
 use std::hash::{DefaultHasher, Hasher};
 
@@ -30,6 +32,9 @@ use gpui::{
 
 /// The most rectangles a damage holds; more are merged.
 pub(crate) const MAX_RECTS: usize = 8;
+/// Past this many changed areas they are not merged pairwise (cubic in their
+/// count) but into one bounding rectangle.
+pub(crate) const MAX_MERGED_AREAS: usize = 64;
 /// Past this many added and removed primitives the diff stops and the whole
 /// window is damaged.
 pub(crate) const MAX_EDITS: usize = 512;
@@ -52,7 +57,6 @@ pub(crate) enum Damage {
 impl Damage {
     /// The damaged rectangles of a window of `size`: the whole window for
     /// [`Damage::Full`].
-    #[cfg_attr(not(test), allow(dead_code, reason = "read by partial redraws"))]
     pub(crate) fn rects(&self, size: Size<DevicePixels>) -> Vec<Bounds<DevicePixels>> {
         match self {
             Damage::Full => vec![Bounds {
@@ -108,7 +112,6 @@ impl DamageTracker {
 
     /// The damage of drawing `scene` into a window of `size` after the
     /// previous frame this tracker saw.
-    #[cfg_attr(not(test), allow(dead_code, reason = "called by partial redraws"))]
     pub(crate) fn frame(&mut self, scene: &Scene, size: Size<DevicePixels>) -> Damage {
         self.frame = self.frame.wrapping_add(1);
         let items = summarize(scene, self.frame);
@@ -310,6 +313,14 @@ fn hash_sprite_source(
             for item in summarize(content, frame) {
                 hasher.write_u64(item.hash);
             }
+            // The group's geometry frame (its vertical radii are in its
+            // background) and any layers inside it.
+            for layer in &content.layers.frames {
+                hasher.write_u32(layer.key.0);
+                hasher.write_u64(layer.generation);
+                hasher.write_u32(layer.tile_size);
+                hash_bytes(hasher, &layer.background);
+            }
         } else {
             hasher.write_u64(frame);
         }
@@ -319,13 +330,9 @@ fn hash_sprite_source(
         return;
     }
     match decode_layer_tile(texture, sprite.tile.tile_id) {
-        Some((layer, tile)) => match scene.layers.frames.iter().find(|frame| frame.key == layer) {
-            Some(layer_frame) => {
-                hasher.write_u64(layer_frame.generation);
-                if layer_frame.dirty_tiles.contains(&tile) {
-                    hasher.write_u64(frame);
-                }
-            }
+        // The layer's generation changes with its content.
+        Some((layer, _tile)) => match scene.layers.frames.iter().find(|frame| frame.key == layer) {
+            Some(layer_frame) => hasher.write_u64(layer_frame.generation),
             None => hasher.write_u64(frame),
         },
         None => hasher.write_u64(frame),
@@ -475,6 +482,10 @@ pub(crate) fn merge(areas: Vec<Bounds<ScaledPixels>>, size: Size<DevicePixels>) 
         .into_iter()
         .filter_map(|a| to_device(a, size))
         .collect();
+    if rects.len() > MAX_MERGED_AREAS {
+        let bounding = rects.iter().skip(1).fold(rects[0], |all, r| union(&all, r));
+        rects = vec![bounding];
+    }
     // Overlapping or touching rectangles become one.
     let mut merged = true;
     while merged {

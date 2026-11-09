@@ -8,10 +8,11 @@
 //!
 //! Each frame's damage comes from [`crate::fast::damage`]. Given the target's
 //! age (how many frames ago its contents were drawn, 0 when unknown, as
-//! `EGL_EXT_buffer_age` reports it), the renderer loads the target's contents
-//! and draws only inside the bounding rectangle of the damage of the last
-//! `age` frames; age 0, an age beyond the kept history, or a frame damaged
-//! whole draws everything. A Y-flipped target (a GL default framebuffer) is
+//! `EGL_EXT_buffer_age` reports it), the renderer loads the target's contents,
+//! clears the bounding rectangle of the damage of the last `age` frames and
+//! draws only inside it; age 0, an age beyond the kept history, or a frame
+//! damaged whole draws everything. The caller gets the damage before anything
+//! is drawn, in the target's coordinates. A Y-flipped target (a GL default framebuffer) is
 //! drawn through a texture the renderer keeps, which then always holds the
 //! previous frame: the frame draws its own damage there, and the target's
 //! region is copied into the target upside down.
@@ -174,21 +175,158 @@ impl FlipBlit {
     }
 }
 
+/// Fills the scissored part of a target with transparent black, as a full
+/// frame's clear would: a partial frame is drawn over the cleared rectangle.
+struct ClearRect {
+    pipeline: wgpu::RenderPipeline,
+}
+
+const CLEAR_SHADER: &str = r#"
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
+    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0);
+}
+"#;
+
+impl ClearRect {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("clear_rect"),
+            source: wgpu::ShaderSource::Wgsl(CLEAR_SHADER.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("clear_rect"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("clear_rect"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self { pipeline }
+    }
+}
+
+/// Draws a full-screen triangle into `view` inside `rect` only, keeping the
+/// rest of the target.
+fn scissored_pass(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    view: &wgpu::TextureView,
+    rect: Bounds<DevicePixels>,
+    label: &str,
+    draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+) {
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_scissor_rect(
+            rect.origin.x.0 as u32,
+            rect.origin.y.0 as u32,
+            rect.size.width.0 as u32,
+            rect.size.height.0 as u32,
+        );
+        draw(&mut pass);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+}
+
+fn whole(size: Size<DevicePixels>) -> Bounds<DevicePixels> {
+    Bounds {
+        origin: point(DevicePixels(0), DevicePixels(0)),
+        size,
+    }
+}
+
+fn region_rects(region: Region, size: Size<DevicePixels>) -> Vec<Bounds<DevicePixels>> {
+    match region {
+        Region::Full => vec![whole(size)],
+        Region::Partial(rect) => vec![rect],
+        Region::Nothing => Vec::new(),
+    }
+}
+
+/// A frame's damage, in the target's coordinates: with `flip_y`, rows count
+/// from the bottom, as EGL's damage rectangles do.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WgpuFrameDamage {
+    /// Where this frame's pixels differ from the previous frame's (for
+    /// `eglSwapBuffersWithDamageKHR`); the whole target for a frame damaged
+    /// whole, none when nothing changed.
+    pub damage: Vec<Bounds<DevicePixels>>,
+    /// What the frame draws into the target (for `eglSetDamageRegionKHR`):
+    /// the region its age asks for; none when the target is up to date.
+    pub redraw: Vec<Bounds<DevicePixels>>,
+}
+
 /// A GPUI renderer that draws into texture views the caller supplies, on a
 /// device the caller created, redrawing only what changed when the target
 /// keeps its contents.
 pub struct WgpuExternalRenderer {
     context: WgpuContext,
     core: WgpuRendererCore,
-    /// The damage of the last frames, newest first; `None` for a frame
-    /// damaged whole.
+    damage: crate::fast::damage::DamageTracker,
+    /// The damage of the last frames that had any, newest first; `None` for
+    /// a frame damaged whole. Frames without damage are not recorded, so an
+    /// age counted in presented frames covers at least what it needs.
     history: VecDeque<Option<Vec<Bounds<DevicePixels>>>>,
+    clear: Option<ClearRect>,
     flip: Option<(FlipBlit, Option<FlipSource>)>,
+    observed_error_generation: u64,
 }
 
 impl WgpuExternalRenderer {
     /// A renderer on the caller's `device` and `queue` (created from `adapter`
     /// of `instance`), drawing into views of `format`.
+    ///
+    /// The renderer installs the device's lost and uncaptured-error callbacks
+    /// (replacing any the caller set, and wgpu's default panic); [`draw`]
+    /// reports those errors.
+    ///
+    /// [`draw`]: Self::draw
     pub fn new(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
@@ -208,13 +346,17 @@ impl WgpuExternalRenderer {
             dual_source_blending,
             color_texture_format,
         );
+        let observed_error_generation = context.errors().current_generation();
         let atlas = Arc::new(WgpuAtlas::from_context(&context));
         let core = WgpuRendererCore::new(&context, atlas, format, wgpu::CompositeAlphaMode::Opaque);
         Ok(Self {
             context,
             core,
+            damage: crate::fast::damage::DamageTracker::default(),
             history: VecDeque::with_capacity(HISTORY + 1),
+            clear: None,
             flip: None,
+            observed_error_generation,
         })
     }
 
@@ -226,7 +368,7 @@ impl WgpuExternalRenderer {
     /// The next frame is drawn whole (the target's contents or the atlas were
     /// lost).
     pub fn invalidate(&mut self) {
-        crate::fast::damage::DamageTracker::invalidate(&mut self.core.fast_frame.damage);
+        self.damage.invalidate();
         self.history.clear();
         if let Some((_, source)) = &mut self.flip {
             *source = None;
@@ -235,9 +377,12 @@ impl WgpuExternalRenderer {
 
     /// Draws `scene` into `target`, a view of a `size` texture whose contents
     /// were drawn `age` frames ago (0: unknown), upside down when `flip_y`.
-    /// Returns the frame's damage: the rectangles whose pixels differ from the
-    /// previous frame's (the whole target for a frame damaged whole), for
-    /// `eglSwapBuffersWithDamage` or `eglSetDamageRegion`.
+    /// `before_drawing` gets the frame's damage before anything is drawn, for
+    /// `eglSetDamageRegionKHR`; the same is returned, for
+    /// `eglSwapBuffersWithDamageKHR`.
+    ///
+    /// A GPU error raised since the previous frame fails this frame; after any
+    /// failure the next frame is drawn whole.
     pub fn draw(
         &mut self,
         scene: &Scene,
@@ -245,35 +390,102 @@ impl WgpuExternalRenderer {
         size: Size<DevicePixels>,
         flip_y: bool,
         age: u32,
-    ) -> Result<Vec<Bounds<DevicePixels>>> {
-        anyhow::ensure!(!self.context.device_lost(), "the GPU device was lost");
-        let damage = crate::fast::damage::DamageTracker::frame(
-            &mut self.core.fast_frame.damage,
-            scene,
-            size,
-        );
-        let rects = damage.rects(size);
-        self.history.push_front(match damage {
-            Damage::Full => None,
-            Damage::Rects(rects) => Some(rects),
-        });
+        before_drawing: impl FnOnce(&WgpuFrameDamage),
+    ) -> Result<WgpuFrameDamage> {
+        if self.context.device_lost() {
+            self.invalidate();
+            anyhow::bail!("the GPU device was lost");
+        }
+        if let Some(error) = self
+            .context
+            .errors()
+            .observe_error(&mut self.observed_error_generation)
+        {
+            self.invalidate();
+            anyhow::bail!("GPU error during an earlier frame: {error}");
+        }
+        let result = self.draw_frame(scene, target, size, flip_y, age, before_drawing);
+        if result.is_err() {
+            self.invalidate();
+        }
+        result
+    }
+
+    fn draw_frame(
+        &mut self,
+        scene: &Scene,
+        target: &wgpu::TextureView,
+        size: Size<DevicePixels>,
+        flip_y: bool,
+        age: u32,
+        before_drawing: impl FnOnce(&WgpuFrameDamage),
+    ) -> Result<WgpuFrameDamage> {
+        let damage = self.damage.frame(scene, size);
+        let frame_rects = damage.rects(size);
+        // What this frame changes, for a target that holds the previous frame.
+        let own = match &damage {
+            Damage::Full => Region::Full,
+            Damage::Rects(rects) if rects.is_empty() => Region::Nothing,
+            Damage::Rects(rects) => {
+                let mut history = VecDeque::new();
+                history.push_front(Some(rects.clone()));
+                redraw_region(&history, 1, size)
+            }
+        };
+        match damage {
+            Damage::Full => self.history.push_front(None),
+            Damage::Rects(rects) if !rects.is_empty() => self.history.push_front(Some(rects)),
+            Damage::Rects(_) => {}
+        }
         self.history.truncate(HISTORY);
+        // What the target needs: an unchanged frame owes it only the frames before.
+        let wanted = match (age, own) {
+            (0, _) => Region::Full,
+            (1, Region::Nothing) => Region::Nothing,
+            (age, Region::Nothing) => redraw_region(&self.history, age - 1, size),
+            (age, _) => redraw_region(&self.history, age, size),
+        };
+
+        let device = Arc::clone(&self.core.resources.device);
+        let format = self.core.target_format;
+        let fresh = flip_y
+            && self
+                .flip
+                .as_ref()
+                .and_then(|(_, source)| source.as_ref())
+                .is_none_or(|source| source.size != size);
+        let (own, wanted) = if fresh {
+            (Region::Full, Region::Full)
+        } else {
+            (own, wanted)
+        };
+        let to_target = |rects: Vec<Bounds<DevicePixels>>| -> Vec<Bounds<DevicePixels>> {
+            if flip_y {
+                rects
+                    .into_iter()
+                    .map(|rect| flip_rect(rect, size.height.0))
+                    .collect()
+            } else {
+                rects
+            }
+        };
+        let frame_damage = WgpuFrameDamage {
+            damage: to_target(frame_rects),
+            redraw: to_target(region_rects(wanted, size)),
+        };
+        before_drawing(&frame_damage);
 
         if !flip_y {
             self.flip = None;
-            let region = redraw_region(&self.history, age, size);
-            self.draw_region(scene, target, size, region)?;
-            return Ok(rects);
+            self.draw_region(scene, target, size, wanted)?;
+            return Ok(frame_damage);
         }
 
-        // The texture the scene is drawn into holds the previous frame unless it
-        // was just made.
-        let device = Arc::clone(&self.core.resources.device);
-        let format = self.core.target_format;
+        // A flipped target is drawn through a texture the renderer keeps, which
+        // holds the previous frame unless it was just made.
         let (blit, source) = self
             .flip
             .get_or_insert_with(|| (FlipBlit::new(&device, format), None));
-        let fresh = source.as_ref().is_none_or(|s| s.size != size);
         if fresh {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("flip_source"),
@@ -305,59 +517,28 @@ impl WgpuExternalRenderer {
                 bind_group,
             });
         }
-        let own = if fresh {
-            Region::Full
-        } else {
-            redraw_region(&self.history, 1, size)
-        };
         let view = source.as_ref().map(|s| s.view.clone()).expect("made above");
         self.draw_region(scene, &view, size, own)?;
-
-        let copy = match redraw_region(&self.history, age, size) {
-            Region::Nothing if !fresh => return Ok(rects),
-            Region::Partial(rect) if !fresh => flip_rect(rect, size.height.0),
-            _ => Bounds {
-                origin: point(DevicePixels(0), DevicePixels(0)),
-                size,
-            },
+        let copy = match wanted {
+            Region::Nothing => return Ok(frame_damage),
+            Region::Partial(rect) => flip_rect(rect, size.height.0),
+            Region::Full => whole(size),
         };
         let (blit, source) = self.flip.as_ref().expect("made above");
         let source = source.as_ref().expect("made above");
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("flip_blit"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("flip_blit"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_scissor_rect(
-                copy.origin.x.0 as u32,
-                copy.origin.y.0 as u32,
-                copy.size.width.0 as u32,
-                copy.size.height.0 as u32,
-            );
-            pass.set_pipeline(&blit.pipeline);
-            pass.set_bind_group(0, &source.bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        self.core
-            .resources
-            .queue
-            .submit(std::iter::once(encoder.finish()));
-        Ok(rects)
+        scissored_pass(
+            &device,
+            &self.core.resources.queue,
+            target,
+            copy,
+            "flip_blit",
+            |pass| {
+                pass.set_pipeline(&blit.pipeline);
+                pass.set_bind_group(0, &source.bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            },
+        );
+        Ok(frame_damage)
     }
 
     fn draw_region(
@@ -370,7 +551,26 @@ impl WgpuExternalRenderer {
         let partial = match region {
             Region::Nothing => return Ok(()),
             Region::Full => None,
-            Region::Partial(rect) => Some(rect),
+            Region::Partial(rect) => {
+                // A full frame starts from a cleared target; so does the rectangle.
+                let device = Arc::clone(&self.core.resources.device);
+                let format = self.core.target_format;
+                let clear = self
+                    .clear
+                    .get_or_insert_with(|| ClearRect::new(&device, format));
+                scissored_pass(
+                    &device,
+                    &self.core.resources.queue,
+                    view,
+                    rect,
+                    "clear_rect",
+                    |pass| {
+                        pass.set_pipeline(&clear.pipeline);
+                        pass.draw(0..3, 0..1);
+                    },
+                );
+                Some(rect)
+            }
         };
         self.core.fast_frame.partial = partial;
         let result = self

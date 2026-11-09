@@ -6,7 +6,7 @@ mod wgpu_renderer;
 
 pub use cosmic_text_system::*;
 #[cfg(not(target_family = "wasm"))]
-pub use fast::external_target::WgpuExternalRenderer;
+pub use fast::external_target::{WgpuExternalRenderer, WgpuFrameDamage};
 pub use wgpu;
 pub use wgpu_atlas::*;
 pub use wgpu_context::*;

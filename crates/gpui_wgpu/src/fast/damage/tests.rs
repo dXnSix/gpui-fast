@@ -265,3 +265,116 @@ fn merged_rectangles_stay_inside_the_window() {
         Damage::Rects(vec![])
     );
 }
+
+#[test]
+fn many_changed_areas_become_one_rectangle() {
+    let dots = |hue: f32| -> Vec<Quad> {
+        (0..200)
+            .map(|i| quad(30. * (i % 60) as f32, 40. * (i / 60) as f32, 4., 4., hue))
+            .collect()
+    };
+    let mut tracker = tracker(&scene(&dots(0.1), &[]));
+    let damage = rects(tracker.frame(&scene(&dots(0.5), &[]), WINDOW));
+    assert_eq!(
+        damage.len(),
+        1,
+        "past MAX_MERGED_AREAS: one bounding rectangle"
+    );
+    assert!(covers(&damage, device(0, 0, 1774, 124)), "{damage:?}");
+}
+
+fn polychrome(texture: gpui::AtlasTextureId, tile: gpui::TileId) -> gpui::PolychromeSprite {
+    gpui::PolychromeSprite {
+        order: 0,
+        pad: 0,
+        tile: AtlasTile {
+            texture_id: texture,
+            tile_id: tile,
+            padding: 0,
+            bounds: device(0, 0, 256, 256),
+        },
+        grayscale: false.into(),
+        opacity: 1.,
+        bounds: bounds(100., 100., 256., 256.),
+        content_mask: ContentMask {
+            bounds: bounds(0., 0., 1920., 1080.),
+        },
+        corner_radii: Corners::default(),
+    }
+}
+
+fn layer_frame(key: u32, generation: u64, tile_size: u32, content: Scene) -> gpui::LayerFrame {
+    gpui::LayerFrame {
+        key: gpui::LayerKey(key),
+        generation,
+        background: gpui::Rgba::default(),
+        tile_size,
+        content: content.into(),
+        dirty_tiles: vec![gpui::TileCoord { x: 0, y: 0 }],
+    }
+}
+
+/// A scroll layer's tile drawn by a sprite, the layer at `generation`.
+fn layer_scene(generation: u64) -> Scene {
+    let mut scene = Scene::default();
+    let tile = gpui::TileCoord { x: 0, y: 0 };
+    scene.insert_primitive(polychrome(
+        gpui::layer_tile_texture_id(gpui::LayerKey(3)),
+        gpui::layer_tile_id(tile),
+    ));
+    scene.finish();
+    scene
+        .layers
+        .frames
+        .push(layer_frame(3, generation, 256, Scene::default()));
+    scene
+}
+
+#[test]
+fn a_dirty_layer_tile_is_damaged_when_its_layer_changes() {
+    let mut tracker = tracker(&layer_scene(1));
+    assert_eq!(
+        tracker.frame(&layer_scene(1), WINDOW),
+        Damage::Rects(Vec::new()),
+        "a tile still listed as dirty, same generation: unchanged"
+    );
+    let damage = rects(tracker.frame(&layer_scene(2), WINDOW));
+    assert!(covers(&damage, device(100, 100, 256, 256)), "{damage:?}");
+}
+
+/// A rounded clip group whose geometry frame carries `vertical` radii.
+fn clip_scene(vertical: f32) -> Scene {
+    let key = 0x0100_0000;
+    let mut content = Scene::default();
+    content.layers.frames.push(gpui::LayerFrame {
+        background: gpui::Rgba {
+            r: vertical,
+            g: vertical,
+            b: vertical,
+            a: vertical,
+        },
+        ..layer_frame(u32::MAX, 0, 0, Scene::default())
+    });
+    let mut scene = Scene::default();
+    scene.insert_primitive(polychrome(
+        gpui::AtlasTextureId {
+            index: 0xF000_0000 + key,
+            kind: AtlasTextureKind::Polychrome,
+        },
+        TileId(0),
+    ));
+    scene.finish();
+    scene.layers.frames.push(layer_frame(key, 0, 0, content));
+    scene
+}
+
+#[test]
+fn a_clip_group_s_vertical_radii_are_part_of_it() {
+    let mut tracker = tracker(&clip_scene(8.));
+    assert_eq!(
+        tracker.frame(&clip_scene(8.), WINDOW),
+        Damage::Rects(Vec::new())
+    );
+    let damage = rects(tracker.frame(&clip_scene(20.), WINDOW));
+    assert!(covers(&damage, device(100, 100, 256, 256)), "{damage:?}");
+}
