@@ -78,6 +78,17 @@ only hold the hooks that call into it.
    the platform.
    The addition is one accessor returning a clone of the `Rc` it already
    holds, and nothing else about the web platform becomes public.
+   A third exception is `fast::hole`: video on a TV plays on a hardware
+   plane under the window, which shows only where the window's pixels are
+   transparent, and blending can never make pixels more transparent than
+   what is under them. `Window::paint_hole` paints a rounded rectangle that
+   replaces the window's pixels with transparent black (what is painted after
+   it blends over it), `Scene::has_holes` tells the platform to make its
+   window translucent, and `AtlasTextureId::hole` / `is_hole` mark the hole
+   sprites renderers draw. A hole is a polychrome sprite with a reserved
+   texture id (`0xDFFF_FFFF`), so the scene and its batching are unchanged;
+   only the wgpu renderer draws holes (`gpui_wgpu::fast::hole`), and the
+   others skip them as an unknown texture.
 6. **New files only inside `fast/`, or in our own crates** such as
    `crates/gpui_perf` (benchmarks, examples and the frame-measuring app) and
    `compat/` (the `gpui-pre-*` stand-ins GPUI Kit applications patch in).

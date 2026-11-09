@@ -14,6 +14,7 @@ pub(crate) mod composition;
 pub(crate) mod dynamic_textures;
 pub(crate) mod frame;
 pub(crate) mod globals;
+pub(crate) mod hole;
 pub(crate) mod layers;
 pub(crate) mod pass_state;
 pub(crate) mod rounded_clip;

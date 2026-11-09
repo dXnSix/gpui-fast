@@ -132,6 +132,7 @@ pub(crate) struct WgpuPipelines {
     pub(crate) mono_sprites: wgpu::RenderPipeline,
     pub(crate) subpixel_sprites: Option<wgpu::RenderPipeline>,
     pub(crate) poly_sprites: wgpu::RenderPipeline,
+    pub(crate) fast_hole: crate::fast::hole::Holes,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
 }
@@ -734,7 +735,7 @@ impl WgpuRendererCore {
         };
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_shaders"),
-            source: crate::fast::rounded_clip::shader_source(shader_source),
+            source: crate::fast::hole::shader_source(shader_source),
         });
 
         let subpixel_shader_module = if dual_source_blending {
@@ -958,6 +959,8 @@ impl WgpuRendererCore {
             1,
             &shader_module,
         );
+        let fast_hole =
+            crate::fast::hole::pipeline(device, layouts, &shader_module, surface_format, None);
 
         WgpuPipelines {
             quads,
@@ -968,6 +971,7 @@ impl WgpuRendererCore {
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
+            fast_hole,
             surfaces,
         }
     }
