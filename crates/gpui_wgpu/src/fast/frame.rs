@@ -35,7 +35,7 @@
 use std::ops::Range;
 
 use anyhow::{Context as _, Result};
-use gpui::{AtlasTextureId, Bounds, PrimitiveBatch, ScaledPixels, Scene};
+use gpui::{AtlasTextureId, Bounds, DevicePixels, PrimitiveBatch, ScaledPixels, Scene};
 
 use crate::WgpuAtlas;
 use crate::fast::bind_groups::BindGroupCache;
@@ -65,6 +65,9 @@ pub(crate) struct FrameState {
     pub(crate) layers: TileCache,
     /// The window's damage from frame to frame, for partial redraws.
     pub(crate) damage: crate::fast::damage::DamageTracker,
+    /// Set for a partial frame: the frame's texture keeps its contents
+    /// (`LoadOp::Load`) and the main passes draw only inside this rectangle.
+    pub(crate) partial: Option<Bounds<DevicePixels>>,
     vertices: Vec<PathRasterizationVertex>,
     sprites: Vec<PathSprite>,
     path_batches: Vec<PathBatch>,
@@ -629,7 +632,9 @@ fn record(
             paths,
             path_batches: &scenes[main].path_batches,
             view: frame_view,
-            clear: Some(clear),
+            // A partial frame keeps the texture's contents outside its rectangle.
+            clear: state.partial.is_none().then_some(clear),
+            scissor: state.partial,
             label: "main_pass",
             globals: target.globals_bind_group,
             path_targets: PathTargets {
@@ -651,6 +656,8 @@ pub(crate) struct SceneDraw<'a> {
     pub(crate) path_batches: &'a [PathBatch],
     pub(crate) view: &'a wgpu::TextureView,
     pub(crate) clear: Option<wgpu::Color>,
+    /// Draws only inside this rectangle (a partial frame).
+    pub(crate) scissor: Option<Bounds<DevicePixels>>,
     pub(crate) label: &'a str,
     /// The globals the scene's primitives are drawn with.
     pub(crate) globals: &'a wgpu::BindGroup,
@@ -813,6 +820,7 @@ pub(crate) fn draw_scene(
         .then_some(step.path_key())
     });
     let mut pass = begin_main_pass(encoder, draw.view, draw.label, draw.clear);
+    set_scissor(&mut pass, draw.scissor);
     let mut bound = PassState::default();
     for step in steps {
         let path_key = step.path_key();
@@ -860,6 +868,7 @@ pub(crate) fn draw_scene(
                     )
                     .then_some(path_key);
                     pass = begin_main_pass(encoder, draw.view, "main_pass_continued", None);
+                    set_scissor(&mut pass, draw.scissor);
                     bound.forget();
                     pass.set_bind_group(3, clip_binding, &[clip_offset]);
                 }
@@ -983,6 +992,17 @@ fn atlas_bind_group(
 }
 
 /// Begins a pass that draws into `view`, cleared to `clear` if one is given.
+fn set_scissor(pass: &mut wgpu::RenderPass<'_>, scissor: Option<Bounds<DevicePixels>>) {
+    if let Some(rect) = scissor {
+        pass.set_scissor_rect(
+            rect.origin.x.0.max(0) as u32,
+            rect.origin.y.0.max(0) as u32,
+            rect.size.width.0.max(0) as u32,
+            rect.size.height.0.max(0) as u32,
+        );
+    }
+}
+
 fn begin_main_pass<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     view: &'a wgpu::TextureView,

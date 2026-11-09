@@ -293,7 +293,7 @@ impl WgpuContext {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn from_native_adapter_and_device(
+    pub(crate) fn from_native_adapter_and_device(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
         device: wgpu::Device,
@@ -687,7 +687,10 @@ impl WgpuContext {
         ))
     }
 
-    fn select_color_texture_format(adapter: &wgpu::Adapter) -> anyhow::Result<wgpu::TextureFormat> {
+    /// Also picks the atlas format for `crate::fast::external_target`'s caller-made devices.
+    pub(crate) fn select_color_texture_format(
+        adapter: &wgpu::Adapter,
+    ) -> anyhow::Result<wgpu::TextureFormat> {
         let required_usages = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let bgra_features = adapter.get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm);
         let rgba_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);
