@@ -207,7 +207,7 @@ impl WgpuContext {
         not(target_family = "wasm"),
         any(test, feature = "bench-support", feature = "test-support")
     ))]
-    fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
+    pub(crate) fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
         let instance = crate::fast::rounded_clip::headless_instance();
         let device_id_filter = Self::device_id_filter();
         let (adapter, device, queue, dual_source_blending, color_texture_format, target_format) =

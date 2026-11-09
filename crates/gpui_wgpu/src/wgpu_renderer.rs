@@ -1249,7 +1249,7 @@ impl WgpuRenderer {
 }
 
 impl WgpuRendererCore {
-    fn new(
+    pub(crate) fn new(
         context: &WgpuContext,
         atlas: Arc<WgpuAtlas>,
         target_format: wgpu::TextureFormat,
@@ -1451,7 +1451,7 @@ impl WgpuRendererCore {
         resources.path_msaa_view = path_msaa_view;
     }
 
-    fn render_frame(
+    pub(crate) fn render_frame(
         &mut self,
         scene: &Scene,
         target_view: &wgpu::TextureView,
