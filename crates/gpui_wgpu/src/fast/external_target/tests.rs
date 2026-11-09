@@ -106,13 +106,11 @@ impl Harness {
         let (context, format) = WgpuContext::create_headless()?;
         let device = (*context.device).clone();
         let queue = (*context.queue).clone();
-        let renderer = WgpuExternalRenderer::new(
-            context.instance.clone(),
-            context.adapter.clone(),
-            device.clone(),
-            queue.clone(),
-            format,
-        )?;
+        let WgpuContext {
+            instance, adapter, ..
+        } = context;
+        let renderer =
+            WgpuExternalRenderer::new(instance, adapter, device.clone(), queue.clone(), format)?;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("external_target"),
             size: wgpu::Extent3d {
