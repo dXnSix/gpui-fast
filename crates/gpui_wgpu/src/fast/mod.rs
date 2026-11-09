@@ -10,6 +10,7 @@
 pub(crate) mod bind_groups;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod composition;
+pub(crate) mod damage;
 pub(crate) mod frame;
 pub(crate) mod gles;
 pub(crate) mod globals;
