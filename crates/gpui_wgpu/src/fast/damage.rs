@@ -22,7 +22,6 @@
 //! geometry; sprites with a non-identity transform cover the whole window.
 //! More than [`MAX_MERGED_AREAS`] changed areas become one rectangle.
 
-
 use std::hash::{DefaultHasher, Hasher};
 
 use gpui::{
