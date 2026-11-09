@@ -467,3 +467,51 @@ fn a_gpu_error_fails_the_next_frame_and_the_one_after_is_whole() -> anyhow::Resu
     assert_eq!(harness.read(), reference(&scene));
     Ok(())
 }
+
+#[test]
+fn released_targets_are_freed_and_the_next_frame_is_whole() -> anyhow::Result<()> {
+    let mut harness = Harness::new()?;
+    let scene = scene(gpui::red(), gpui::blue());
+    harness.draw(&scene, true, 0);
+    assert!(
+        harness
+            .renderer
+            .flip
+            .as_ref()
+            .is_some_and(|(_, source)| source.is_some()),
+        "a flipped target keeps a texture"
+    );
+    assert!(
+        harness
+            .renderer
+            .core
+            .resources
+            .path_intermediate_view
+            .is_some()
+    );
+
+    harness.renderer.release_targets();
+    assert!(
+        harness
+            .renderer
+            .flip
+            .as_ref()
+            .is_none_or(|(_, source)| source.is_none()),
+        "the flip texture is freed"
+    );
+    assert!(
+        harness
+            .renderer
+            .core
+            .resources
+            .path_intermediate_view
+            .is_none()
+    );
+    assert!(harness.renderer.core.resources.path_msaa_view.is_none());
+
+    harness.mark();
+    let damage = harness.draw(&scene, true, 1);
+    assert_eq!(damage, [device_rect(0, 0, 64, 48)], "drawn whole");
+    assert_eq!(harness.read(), flipped(&reference(&scene)));
+    Ok(())
+}

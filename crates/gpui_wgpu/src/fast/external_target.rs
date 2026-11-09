@@ -375,6 +375,15 @@ impl WgpuExternalRenderer {
         }
     }
 
+    /// Frees the target-sized textures the renderer keeps (the app is paused,
+    /// its surface released): the texture a flipped target is drawn through
+    /// and the path intermediates. The next frame makes them again and is
+    /// drawn whole.
+    pub fn release_targets(&mut self) {
+        self.invalidate();
+        self.core.resources.invalidate_intermediate_textures();
+    }
+
     /// Draws `scene` into `target`, a view of a `size` texture whose contents
     /// were drawn `age` frames ago (0: unknown), upside down when `flip_y`.
     /// `before_drawing` gets the frame's damage before anything is drawn, for

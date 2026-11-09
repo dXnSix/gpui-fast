@@ -151,7 +151,10 @@ unchanged, and a new entry needs as good a reason.
   a GL default framebuffer, through a texture the renderer keeps) and hands
   the frame's damage to a callback before drawing and back after, in the
   target's coordinates; `sprite_atlas` gives the platform window its atlas,
-  and `invalidate` makes the next frame whole. No `wgpu::Surface` is created
+  `invalidate` makes the next frame whole, and
+  `release_targets` also frees the target-sized textures it keeps while the
+  app is paused (with `WgpuResources::invalidate_intermediate_textures` opened
+  to it). No `wgpu::Surface` is created
   or presented. Given the target's age (`EGL_EXT_buffer_age`), a frame loads
   the target, clears the bounding rectangle of the last frames' damage
   (computed by `fast::damage`) and redraws only inside it. Platforms that own

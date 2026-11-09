@@ -203,7 +203,8 @@ struct CachedTextureBindGroup {
 }
 
 impl WgpuResources {
-    fn invalidate_intermediate_textures(&mut self) {
+    /// Also frees `crate::fast::external_target`'s textures while the app is paused.
+    pub(crate) fn invalidate_intermediate_textures(&mut self) {
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
