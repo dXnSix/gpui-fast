@@ -1052,6 +1052,7 @@ impl WgpuRenderer {
             return;
         };
         crate::fast::layers::TileCache::clear(&mut core.fast_frame.layers);
+        crate::fast::damage::DamageTracker::invalidate(&mut core.fast_frame.damage);
         let resources = &mut core.resources;
 
         // Wait for any in-flight GPU work to complete before destroying textures
@@ -1103,6 +1104,7 @@ impl WgpuRenderer {
             return;
         };
         crate::fast::layers::TileCache::clear(&mut core.fast_frame.layers);
+        crate::fast::damage::DamageTracker::invalidate(&mut core.fast_frame.damage);
         let resources = &mut core.resources;
         resources.pipelines = WgpuRendererCore::create_pipelines(
             &resources.device,
@@ -1188,6 +1190,7 @@ impl WgpuRenderer {
                 core.resources.invalidate_intermediate_textures();
                 self.atlas.clear();
                 crate::fast::layers::TileCache::clear(&mut core.fast_frame.layers);
+                crate::fast::damage::DamageTracker::invalidate(&mut core.fast_frame.damage);
                 self.needs_redraw = true;
                 self.failed_frame_count = 0;
                 return false;
