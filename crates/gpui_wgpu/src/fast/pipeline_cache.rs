@@ -8,17 +8,20 @@
 //! every pipeline is created with it, and its data is written back, atomically, once the
 //! pipelines exist. Without the feature or a key nothing is read or written.
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
 /// Where the cache files go; unset means the platform's cache directory.
 pub(crate) const DIR_ENV: &str = "GPUI_PIPELINE_CACHE_DIR";
 
-/// The cache of the current device. GPUI uses one device at a time (a new one after a device
-/// loss replaces it), so one slot is enough and an old device is never kept alive by it.
-static CURRENT: Mutex<Option<Current>> = Mutex::new(None);
+thread_local! {
+    /// The cache of the current device. GPUI creates its device and pipelines on the main
+    /// thread and uses one device at a time (a new one after a device loss replaces it), so one
+    /// slot on that thread is enough and an old device is never kept alive by it.
+    static CURRENT: RefCell<Option<Current>> = const { RefCell::new(None) };
+}
 
 struct Current {
     device: wgpu::Device,
@@ -40,7 +43,7 @@ pub(crate) fn features(adapter: &wgpu::Adapter) -> wgpu::Features {
 /// Creates the device's cache from the file on disk, when the device has the feature. A previous
 /// device's cache is dropped first, whether or not this one gets a cache.
 pub(crate) fn open(adapter: &wgpu::Adapter, device: &wgpu::Device) {
-    *CURRENT.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    CURRENT.with(|current| current.borrow_mut().take());
     let Some(path) = cache_file(
         device.features().contains(wgpu::Features::PIPELINE_CACHE),
         wgpu::util::pipeline_cache_key(&adapter.get_info()),
@@ -58,36 +61,42 @@ pub(crate) fn open(adapter: &wgpu::Adapter, device: &wgpu::Device) {
         path.display(),
         if data.is_some() { "loaded" } else { "new" }
     );
-    *CURRENT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Current {
-        device: device.clone(),
-        cache,
-        path,
+    CURRENT.with(|current| {
+        *current.borrow_mut() = Some(Current {
+            device: device.clone(),
+            cache,
+            path,
+        })
     });
 }
 
 /// The cache to pass to the pipelines `device` creates.
 pub(crate) fn get(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
-    let current = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
-    current
-        .as_ref()
-        .filter(|current| current.device == *device)
-        .map(|current| current.cache.clone())
+    CURRENT.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .filter(|current| current.device == *device)
+            .map(|current| current.cache.clone())
+    })
 }
 
 /// Writes the cache's data back once the pipelines exist.
 pub(crate) fn store(device: &wgpu::Device) {
-    let current = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(current) = current.as_ref().filter(|current| current.device == *device) else {
-        return;
-    };
-    if let Some(data) = current.cache.get_data()
-        && let Err(err) = write_atomic(&current.path, &data)
-    {
-        log::warn!(
-            "writing the pipeline cache {}: {err}",
-            current.path.display()
-        );
-    }
+    CURRENT.with(|current| {
+        let current = current.borrow();
+        let Some(current) = current.as_ref().filter(|current| current.device == *device) else {
+            return;
+        };
+        if let Some(data) = current.cache.get_data()
+            && let Err(err) = write_atomic(&current.path, &data)
+        {
+            log::warn!(
+                "writing the pipeline cache {}: {err}",
+                current.path.display()
+            );
+        }
+    });
 }
 
 pub(crate) fn descriptor(data: Option<&[u8]>) -> wgpu::PipelineCacheDescriptor<'_> {
