@@ -951,6 +951,19 @@ pub(crate) fn draw_scene(
                     );
                 }
             }
+            PrimitiveBatch::PolychromeSprites { texture_id, range }
+                if crate::fast::hole::is_hole(texture_id) =>
+            {
+                draw_batch(
+                    &mut pass,
+                    &mut bound,
+                    draw.globals,
+                    &pipelines.fast_hole.pipeline,
+                    &upload.polychrome_sprites,
+                    Some(&pipelines.fast_hole.texture),
+                    range,
+                );
+            }
             PrimitiveBatch::PolychromeSprites { texture_id, range } => {
                 let Some(texture) = atlas_bind_group(target.atlas, &texture_bind_group, texture_id)
                 else {

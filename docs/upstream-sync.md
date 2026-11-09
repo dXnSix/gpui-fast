@@ -162,6 +162,15 @@ unchanged, and a new entry needs as good a reason.
   `eglSwapBuffersWithDamageKHR`); `WgpuRenderer::new` stays the path for
   everyone else. `WgpuContext::from_native_adapter_and_device` and
   `select_color_texture_format` are `pub(crate)` for it.
+- `gpui` adds `fast::hole` (a third exception, on `video-hole` for `main`):
+  video on a TV plays on a hardware plane under the window, which shows only
+  where the window's pixels are transparent. `Window::paint_hole` paints a
+  rounded rectangle that replaces the window's pixels with transparent black
+  (what is painted after it blends over it), `Scene::has_holes` tells the
+  platform to make its window translucent, and `AtlasTextureId::hole` /
+  `is_hole` mark the hole sprites, polychrome sprites with the reserved
+  texture id `0xDFFF_FFFF`. Only the wgpu renderer draws them
+  (`gpui_wgpu::fast::hole`).
 - Window composition, the API of
   [zed#62379](https://github.com/zed-industries/zed/pull/62379), which
   upstream has not merged yet: native views drawn between a window's GPUI
