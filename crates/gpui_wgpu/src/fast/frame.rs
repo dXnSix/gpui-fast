@@ -63,8 +63,6 @@ pub(crate) struct FrameState {
     pub(crate) bind_groups: BindGroupCache,
     pub(crate) globals: UploadedGlobals,
     pub(crate) layers: TileCache,
-    /// The window's damage from frame to frame, for partial redraws.
-    pub(crate) damage: crate::fast::damage::DamageTracker,
     vertices: Vec<PathRasterizationVertex>,
     sprites: Vec<PathSprite>,
     path_batches: Vec<PathBatch>,
