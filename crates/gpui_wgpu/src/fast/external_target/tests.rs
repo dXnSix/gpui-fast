@@ -7,7 +7,7 @@ use gpui::{
 
 use gpui::PlatformHeadlessRenderer as _;
 
-use super::{Region, WgpuExternalRenderer, flip_rect, redraw_region};
+use super::{Region, WgpuExternalRenderer, WgpuFrameDamage, flip_rect, redraw_region};
 use crate::WgpuHeadlessRenderer;
 use crate::wgpu_context::WgpuContext;
 
@@ -139,9 +139,23 @@ impl Harness {
     }
 
     fn draw(&mut self, scene: &Scene, flip_y: bool, age: u32) -> Vec<Bounds<DevicePixels>> {
-        self.renderer
-            .draw(scene, &self.view, SIZE, flip_y, age)
-            .expect("the frame draws")
+        self.frame(scene, flip_y, age).damage
+    }
+
+    fn frame(&mut self, scene: &Scene, flip_y: bool, age: u32) -> WgpuFrameDamage {
+        let mut told = None;
+        let frame = self
+            .renderer
+            .draw(scene, &self.view, SIZE, flip_y, age, |damage| {
+                told = Some(damage.clone())
+            })
+            .expect("the frame draws");
+        assert_eq!(
+            told.as_ref(),
+            Some(&frame),
+            "the same damage, before drawing"
+        );
+        frame
     }
 
     /// Paints the whole target magenta, standing in for contents a partial
@@ -278,7 +292,7 @@ fn partial() -> anyhow::Result<()> {
         } else {
             reference(&next)
         };
-        let rect = if flip_y { flip_rect(rect, 48) } else { rect };
+        // The damage is in the target's coordinates already.
         let image = harness.read();
         for (x, y, pixel) in image.enumerate_pixels() {
             if inside(rect, x, y) {
@@ -346,5 +360,110 @@ fn an_older_target_gets_the_damage_of_every_frame_since() -> anyhow::Result<()> 
     harness.mark();
     harness.draw(&last, false, 1);
     assert_eq!(harness.read(), reference(&last), "after invalidate");
+    Ok(())
+}
+
+/// Red over nothing: no opaque background under the block.
+fn bare(block: Option<Hsla>) -> Scene {
+    let mut scene = Scene::default();
+    if let Some(color) = block {
+        scene.insert_primitive(quad(16., 8., 16., 12., color));
+    }
+    scene.finish();
+    scene
+}
+
+#[test]
+fn a_partial_frame_clears_what_disappears() -> anyhow::Result<()> {
+    for flip_y in [false, true] {
+        let mut harness = Harness::new()?;
+        harness.draw(&bare(Some(gpui::red())), flip_y, 0);
+        let damage = harness.draw(&bare(None), flip_y, 1);
+        assert_eq!(damage.len(), 1);
+        let mut full = Harness::new()?;
+        full.draw(&bare(None), flip_y, 0);
+        assert_eq!(
+            harness.read(),
+            full.read(),
+            "flip {flip_y}: no red left behind"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn damage_is_given_before_drawing_in_target_coordinates() -> anyhow::Result<()> {
+    let mut upright = Harness::new()?;
+    let mut flipped = Harness::new()?;
+    upright.frame(&scene(gpui::red(), gpui::blue()), false, 0);
+    flipped.frame(&scene(gpui::red(), gpui::blue()), true, 0);
+    let a = upright.frame(&scene(gpui::green(), gpui::blue()), false, 1);
+    let b = flipped.frame(&scene(gpui::green(), gpui::blue()), true, 1);
+    assert_eq!(
+        a.redraw, a.damage,
+        "a one-frame-old target redraws the damage"
+    );
+    assert_eq!(
+        b.damage,
+        vec![flip_rect(a.damage[0], 48)],
+        "rows from the bottom"
+    );
+    assert_eq!(b.redraw, b.damage);
+    Ok(())
+}
+
+#[test]
+fn an_unchanged_frame_is_not_counted_in_the_age() -> anyhow::Result<()> {
+    let mut harness = Harness::new()?;
+    harness.draw(&scene(gpui::red(), gpui::blue()), false, 0);
+    // A: the first block changes. B: nothing (the caller may skip its swap).
+    let a = harness.draw(&scene(gpui::green(), gpui::blue()), false, 1);
+    let b = harness.frame(&scene(gpui::green(), gpui::blue()), false, 1);
+    assert!(
+        b.damage.is_empty() && b.redraw.is_empty(),
+        "B draws nothing"
+    );
+    // C: the other block changes, into a target two frames old.
+    harness.mark();
+    let last = scene(gpui::green(), gpui::yellow());
+    let c = harness.frame(&last, false, 2);
+    assert!(
+        c.redraw.iter().any(|r| r.union(&a[0]) == *r),
+        "A's change is redrawn too: {c:?}"
+    );
+    let full = reference(&last);
+    let image = harness.read();
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if inside(a[0], x, y) {
+            assert_eq!(pixel, full.get_pixel(x, y), "({x}, {y}) of A");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_gpu_error_fails_the_next_frame_and_the_one_after_is_whole() -> anyhow::Result<()> {
+    let mut harness = Harness::new()?;
+    let scene = scene(gpui::red(), gpui::blue());
+    harness.draw(&scene, false, 0);
+    // An invalid buffer: an uncaptured validation error on the device.
+    let _bad = harness.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("invalid"),
+        size: 4,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE,
+        mapped_at_creation: false,
+    });
+    let failed = harness
+        .renderer
+        .draw(&scene, &harness.view, SIZE, false, 1, |_| {});
+    assert!(failed.is_err(), "the error is reported");
+    harness.mark();
+    let damage = harness.draw(&scene, false, 1);
+    assert_eq!(
+        damage,
+        [device_rect(0, 0, 64, 48)],
+        "drawn whole after the failure"
+    );
+    assert_eq!(harness.read(), reference(&scene));
     Ok(())
 }
