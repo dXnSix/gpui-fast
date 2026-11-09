@@ -515,3 +515,13 @@ fn released_targets_are_freed_and_the_next_frame_is_whole() -> anyhow::Result<()
     assert_eq!(harness.read(), flipped(&reference(&scene)));
     Ok(())
 }
+
+#[test]
+fn dynamic_textures_are_made_from_the_renderers_context() -> anyhow::Result<()> {
+    let harness = Harness::new()?;
+    let context = harness.renderer.context();
+    assert!(*context.device == harness.device, "the caller's device");
+    let texture = context.create_dynamic_texture(size(DevicePixels(8), DevicePixels(8)))?;
+    drop(texture);
+    Ok(())
+}

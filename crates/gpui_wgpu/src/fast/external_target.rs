@@ -365,6 +365,12 @@ impl WgpuExternalRenderer {
         &self.core.atlas
     }
 
+    /// The context the renderer draws with: dynamic textures painted into
+    /// its frames are made from it (`WgpuContext::create_dynamic_texture`).
+    pub fn context(&self) -> &WgpuContext {
+        &self.context
+    }
+
     /// The next frame is drawn whole (the target's contents or the atlas were
     /// lost).
     pub fn invalidate(&mut self) {

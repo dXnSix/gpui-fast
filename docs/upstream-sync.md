@@ -164,7 +164,8 @@ unchanged, and a new entry needs as good a reason.
   scene into a texture view the caller supplies for that frame (Y-flipped for
   a GL default framebuffer, through a texture the renderer keeps) and hands
   the frame's damage to a callback before drawing and back after, in the
-  target's coordinates; `sprite_atlas` gives the platform window its atlas,
+  target's coordinates; `sprite_atlas` gives the platform window its atlas, `context` the
+  context its dynamic textures are made from,
   `invalidate` makes the next frame whole, and
   `release_targets` also frees the target-sized textures it keeps while the
   app is paused (with `WgpuResources::invalidate_intermediate_textures` opened
