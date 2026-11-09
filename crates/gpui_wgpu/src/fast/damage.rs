@@ -22,14 +22,6 @@
 //! geometry; sprites with a non-identity transform cover the whole window.
 //! More than [`MAX_MERGED_AREAS`] changed areas become one rectangle.
 
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "read by partial redraws, on the external-target branch"
-    )
-)]
-
 use std::hash::{DefaultHasher, Hasher};
 
 use gpui::{

@@ -165,6 +165,20 @@ unchanged, and a new entry needs as good a reason.
   in `fast::rounded_clip_scene`; Metal, WGPU and Direct3D evaluate the clip
   stack directly without intermediate render targets.
 - `crates/gpui/Cargo.toml` names this repository and sets `publish = false`.
+- `gpui_wgpu` exports `WgpuExternalRenderer` (`fast::external_target`), a
+  second exception beside `fast::dynamic_textures`: a renderer on a wgpu
+  instance, adapter, device and queue the caller created (one over a GL
+  context a platform owns, through `wgpu_hal::gles::Adapter::new_external`),
+  with `new`, `sprite_atlas`, `invalidate`, and `draw`, which draws a scene
+  into a texture view the caller supplies for that frame, Y-flipped for a GL
+  default framebuffer, and returns the frame's damage. No `wgpu::Surface` is
+  created or presented. Given the target's age (`EGL_EXT_buffer_age`), a
+  frame loads the target and redraws only inside the bounding rectangle of the
+  last frames' damage, computed by `fast::damage`. Platforms that own their
+  EGL surface need it for partial presents (`EGL_KHR_partial_update`,
+  `eglSwapBuffersWithDamage`); `WgpuRenderer::new` stays the path for
+  everyone else. `WgpuContext::from_native_adapter_and_device` and
+  `select_color_texture_format` are `pub(crate)` for it.
 - Window composition, the API of
   [zed#62379](https://github.com/zed-industries/zed/pull/62379), which
   upstream has not merged yet: native views drawn between a window's GPUI
