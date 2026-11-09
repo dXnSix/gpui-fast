@@ -214,6 +214,7 @@ impl WgpuResources {
 }
 
 pub(crate) struct WgpuRendererCore {
+    pub(crate) fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore,
     pub(crate) resources: WgpuResources,
     pub(crate) atlas: Arc<WgpuAtlas>,
     pub(crate) path_globals_offset: u64,
@@ -1411,6 +1412,9 @@ impl WgpuRendererCore {
             target_format,
             max_texture_size,
             fast_frame: crate::fast::frame::FrameState::default(),
+            fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::clone(
+                &context.fast_dynamic_textures,
+            ),
         }
     }
 

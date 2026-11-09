@@ -11,6 +11,7 @@ pub(crate) mod bind_groups;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod composition;
 pub(crate) mod damage;
+pub(crate) mod dynamic_textures;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod external_target;
 pub(crate) mod frame;
