@@ -13,6 +13,7 @@ use wgpu::TextureFormat;
 
 #[derive(Clone)]
 pub struct WgpuContext {
+    pub(crate) fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore,
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,
@@ -209,7 +210,7 @@ impl WgpuContext {
         not(target_family = "wasm"),
         any(test, feature = "bench-support", feature = "test-support")
     ))]
-    fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
+    pub(crate) fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
         let instance = crate::fast::rounded_clip::headless_instance();
         let device_id_filter = Self::device_id_filter();
         let (adapter, device, queue, dual_source_blending, color_texture_format, target_format) =
@@ -295,7 +296,7 @@ impl WgpuContext {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn from_native_adapter_and_device(
+    pub(crate) fn from_native_adapter_and_device(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
         device: wgpu::Device,
@@ -321,6 +322,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             errors,
+            fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::default(),
         }
     }
 
@@ -420,6 +422,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             errors,
+            fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::default(),
         };
         Ok(PreparedWebGraphics { context, surface })
     }
@@ -688,7 +691,10 @@ impl WgpuContext {
         ))
     }
 
-    fn select_color_texture_format(adapter: &wgpu::Adapter) -> anyhow::Result<wgpu::TextureFormat> {
+    /// Also picks the atlas format for `crate::fast::external_target`'s caller-made devices.
+    pub(crate) fn select_color_texture_format(
+        adapter: &wgpu::Adapter,
+    ) -> anyhow::Result<wgpu::TextureFormat> {
         let required_usages = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let bgra_features = adapter.get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm);
         let rgba_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);

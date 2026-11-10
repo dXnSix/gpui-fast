@@ -134,6 +134,7 @@ pub(crate) struct WgpuPipelines {
     pub(crate) mono_sprites: wgpu::RenderPipeline,
     pub(crate) subpixel_sprites: Option<wgpu::RenderPipeline>,
     pub(crate) poly_sprites: wgpu::RenderPipeline,
+    pub(crate) fast_hole: crate::fast::hole::Holes,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
 }
@@ -205,7 +206,8 @@ struct CachedTextureBindGroup {
 }
 
 impl WgpuResources {
-    fn invalidate_intermediate_textures(&mut self) {
+    /// Also frees `crate::fast::external_target`'s textures while the app is paused.
+    pub(crate) fn invalidate_intermediate_textures(&mut self) {
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -214,6 +216,7 @@ impl WgpuResources {
 }
 
 pub(crate) struct WgpuRendererCore {
+    pub(crate) fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore,
     pub(crate) resources: WgpuResources,
     pub(crate) atlas: Arc<WgpuAtlas>,
     pub(crate) path_globals_offset: u64,
@@ -735,7 +738,7 @@ impl WgpuRendererCore {
         };
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_shaders"),
-            source: crate::fast::rounded_clip::shader_source(shader_source),
+            source: crate::fast::hole::shader_source(shader_source),
         });
 
         let subpixel_shader_module = if dual_source_blending {
@@ -960,6 +963,13 @@ impl WgpuRendererCore {
             1,
             &shader_module,
         );
+        let fast_hole = crate::fast::hole::pipeline(
+            device,
+            layouts,
+            &shader_module,
+            surface_format,
+            Option::as_ref(&fast_pipeline_cache),
+        );
 
         crate::fast::pipeline_cache::store(device);
         WgpuPipelines {
@@ -971,6 +981,7 @@ impl WgpuRendererCore {
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
+            fast_hole,
             surfaces,
         }
     }
@@ -1248,7 +1259,7 @@ impl WgpuRenderer {
 }
 
 impl WgpuRendererCore {
-    fn new(
+    pub(crate) fn new(
         context: &WgpuContext,
         atlas: Arc<WgpuAtlas>,
         target_format: wgpu::TextureFormat,
@@ -1403,6 +1414,9 @@ impl WgpuRendererCore {
             target_format,
             max_texture_size,
             fast_frame: crate::fast::frame::FrameState::default(),
+            fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::clone(
+                &context.fast_dynamic_textures,
+            ),
         }
     }
 
@@ -1450,7 +1464,7 @@ impl WgpuRendererCore {
         resources.path_msaa_view = path_msaa_view;
     }
 
-    fn render_frame(
+    pub(crate) fn render_frame(
         &mut self,
         scene: &Scene,
         target_view: &wgpu::TextureView,
