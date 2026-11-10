@@ -1006,7 +1006,7 @@ fn polychrome_bind_group(
     atlas_bind_group(target.atlas, texture_bind_group, texture_id)
 }
 
-/// Begins a pass that draws into `view`, cleared to `clear` if one is given.
+/// Clips `pass` to `scissor`, when the draw has one.
 fn set_scissor(pass: &mut wgpu::RenderPass<'_>, scissor: Option<Bounds<DevicePixels>>) {
     if let Some(rect) = scissor {
         pass.set_scissor_rect(
@@ -1018,6 +1018,7 @@ fn set_scissor(pass: &mut wgpu::RenderPass<'_>, scissor: Option<Bounds<DevicePix
     }
 }
 
+/// Begins a pass that draws into `view`, cleared to `clear` if one is given.
 fn begin_main_pass<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     view: &'a wgpu::TextureView,

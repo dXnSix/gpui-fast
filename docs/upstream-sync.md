@@ -166,8 +166,8 @@ unchanged, and a new entry needs as good a reason.
   stack directly without intermediate render targets.
 - `crates/gpui/Cargo.toml` names this repository and sets `publish = false`.
 - `gpui_wgpu` exports `WgpuExternalRenderer` and `WgpuFrameDamage`
-  (`fast::external_target`), a second exception beside
-  `fast::dynamic_textures`: a renderer on a wgpu instance, adapter, device and
+  (`fast::external_target`), a third exception beside
+  `fast::dynamic_textures` and `WebPlatform::wgpu_context()`: a renderer on a wgpu instance, adapter, device and
   queue the caller created (one over a GL context a platform owns, through
   `wgpu_hal::gles::Adapter::new_external`). `new` builds it, `draw` draws a
   scene into a texture view the caller supplies for that frame (Y-flipped for
