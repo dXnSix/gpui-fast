@@ -157,8 +157,8 @@ unchanged, and a new entry needs as good a reason.
   stack directly without intermediate render targets.
 - `crates/gpui/Cargo.toml` names this repository and sets `publish = false`.
 - `gpui_wgpu` exports `WgpuExternalRenderer` and `WgpuFrameDamage`
-  (`fast::external_target`), a second exception beside
-  `fast::dynamic_textures` (on `main`): a renderer on a wgpu instance, adapter, device and
+  (`fast::external_target`), a third exception beside
+  `fast::dynamic_textures` and `WebPlatform::wgpu_context()` (on `main`): a renderer on a wgpu instance, adapter, device and
   queue the caller created (one over a GL context a platform owns, through
   `wgpu_hal::gles::Adapter::new_external`). `new` builds it, `draw` draws a
   scene into a texture view the caller supplies for that frame (Y-flipped for
@@ -177,7 +177,7 @@ unchanged, and a new entry needs as good a reason.
   `eglSwapBuffersWithDamageKHR`); `WgpuRenderer::new` stays the path for
   everyone else. `WgpuContext::from_native_adapter_and_device` and
   `select_color_texture_format` are `pub(crate)` for it.
-- `gpui` adds `fast::hole` (a third exception, on `video-hole` for `main`):
+- `gpui` adds `fast::hole` (a fourth exception here, the third on `video-hole` for `main`):
   video on a TV plays on a hardware plane under the window, which shows only
   where the window's pixels are transparent. `Window::paint_hole` paints a
   rounded rectangle that replaces the window's pixels with transparent black
