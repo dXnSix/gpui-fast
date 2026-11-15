@@ -1,14 +1,14 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast-apple"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 publish = ["crates-io"]
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
-documentation = "https://docs.rs/gpui-fast-apple/0.1.13/gpui_apple/"
+documentation = "https://docs.rs/gpui-fast-apple/0.1.14/gpui_apple/"
 description = "gpui_apple: GPUI with gpui-fast rendering and layout optimizations"
 autoexamples = false
 autobenches = false
@@ -31,7 +31,7 @@ font-kit = ["dep:font-kit", "dep:core-text", "dep:objc2-core-text", "dep:pathfin
 [dependencies.gpui]
 default-features = false
 package = "gpui-fast"
-version = "^0.1.13"
+version = "^0.1.14"
 path = "../gpui"
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.anyhow]
@@ -44,7 +44,7 @@ version = "4.7"
 version = "0.6"
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.collections]
-version = "=0.3.11"
+version = "=0.3.12"
 package = "gpui-pre-collections"
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.core-foundation]
@@ -80,7 +80,7 @@ features = ["source"]
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.gpui_util]
 package = "gpui-pre-util"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.image]
 version = "0.25.1"

@@ -506,6 +506,7 @@ impl<E: Element> Drawable<E> {
                         }
                         self.element
                             .a11y_synthetic_children(&mut prepaint, &mut builder);
+                        crate::fast::a11y::finish_synthetic_children(builder);
                     }
                     window.a11y.nodes.pop();
                 }

@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 use crate::CanvasFontFallback;
 use crate::dispatcher::WebDispatcher;
 use crate::display::WebDisplay;
@@ -39,7 +40,7 @@ pub struct WebPlatform {
     active_display: Rc<dyn PlatformDisplay>,
     callbacks: RefCell<WebPlatformCallbacks>,
     backend_preference: WebBackendPreference,
-    wgpu_context: Rc<RefCell<Option<WgpuContext>>>,
+    pub(crate) wgpu_context: Rc<RefCell<Option<WgpuContext>>>,
     prepared_window: Rc<RefCell<Option<PreparedWebWindow>>>,
     window_lifecycle: Rc<Cell<WebWindowLifecycle>>,
     cursor_visible: Rc<Cell<bool>>,

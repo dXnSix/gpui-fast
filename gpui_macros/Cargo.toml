@@ -1,7 +1,7 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast-macros"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 publish = ["crates-io"]
 license = "Apache-2.0"
@@ -9,7 +9,7 @@ description = "gpui_macros: GPUI with gpui-fast rendering and layout optimizatio
 repository = "https://github.com/longbridge/gpui-fast"
 homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
-documentation = "https://docs.rs/gpui-fast-macros/0.1.13/gpui_macros/"
+documentation = "https://docs.rs/gpui-fast-macros/0.1.14/gpui_macros/"
 autoexamples = false
 autobenches = false
 autotests = false

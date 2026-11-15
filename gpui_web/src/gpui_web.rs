@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 //! GPUI's browser platform uses one document-owned canvas and supports one top-level window.
 //! Browser WebGPU is preferred by default, with an automatic WebGL2 fallback. Applications can
 //! force either backend with `WebBackendPreference`. Opening a second top-level window, or
@@ -15,6 +16,8 @@ mod dispatcher;
 mod display;
 #[cfg(target_family = "wasm")]
 mod events;
+#[cfg(any(target_family = "wasm", test))]
+mod fast;
 #[cfg(any(target_family = "wasm", test))]
 mod glyph_cache;
 #[cfg(target_family = "wasm")]

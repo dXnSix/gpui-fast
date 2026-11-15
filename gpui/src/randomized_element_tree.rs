@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 //! A seeded, mutable element tree for benchmarks and tests of GPUI rendering.
 use crate::{
     AnimationExt as _, AnyElement, AppContext as _, Context, ElementId, Entity, Hsla,
@@ -1892,7 +1893,8 @@ mod tests {
             .with_topology(RandomizedElementTreeTopology::Wide)
             .with_entity_density(1.0)
             .with_handler_density(1.0);
-        let window = cx.open_window(WINDOW_SIZE, move |_, cx| {
+        let window = cx.open_window(WINDOW_SIZE, move |window, cx| {
+            crate::fast::retained::upstream_work_counter_test(window);
             RandomizedElementTree::new_with_config(config, cx)
         });
         let root = window

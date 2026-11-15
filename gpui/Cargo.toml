@@ -1,7 +1,7 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 authors = ["Nathan Sobo <nathan@zed.dev>", "Longbridge"]
 description = "gpui: GPUI with gpui-fast rendering and layout optimizations"
@@ -13,7 +13,7 @@ readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
 autobenches = false
-documentation = "https://docs.rs/gpui-fast/0.1.13/gpui/"
+documentation = "https://docs.rs/gpui-fast/0.1.14/gpui/"
 autoexamples = false
 autotests = false
 include = ["/src/**", "/resources/**", "/build.rs", "/Cargo.toml", "/README.md", "/LICENSE", "/NOTICE"]
@@ -65,13 +65,13 @@ version = "0.3"
 version = "2.6.0"
 
 [dependencies.collections]
-version = "=0.3.11"
+version = "=0.3.12"
 package = "gpui-pre-collections"
 
 [dependencies.bench_metrics]
 optional = true
 package = "gpui-pre-bench-metrics"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.criterion]
 version = "0.8.2"
@@ -94,16 +94,16 @@ optional = true
 
 [dependencies.gpui_macros]
 package = "gpui-fast-macros"
-version = "^0.1.13"
+version = "^0.1.14"
 path = "../gpui_macros"
 
 [dependencies.gpui_shared_string]
 package = "gpui-pre-shared-string"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.http_client]
 package = "gpui-pre-http-client"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.icu_segmenter]
 version = "2.3.0"
@@ -163,11 +163,11 @@ features = ["std", "perf"]
 
 [dependencies.refineable]
 package = "gpui-pre-refineable"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.scheduler]
 package = "gpui-pre-scheduler"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.resvg]
 version = "0.46.0"
@@ -208,7 +208,7 @@ features = ["derive"]
 
 [dependencies.sum_tree]
 package = "gpui-pre-sum-tree"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.taffy]
 version = "=0.15.0"
@@ -223,7 +223,7 @@ version = "1.10"
 
 [dependencies.gpui_util]
 package = "gpui-pre-util"
-version = "=0.3.11"
+version = "=0.3.12"
 
 [dependencies.hdrhistogram]
 version = "7"
