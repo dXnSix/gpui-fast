@@ -1,14 +1,14 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast-macos"
-version = "0.1.14"
+version = "0.1.16"
 edition = "2024"
 publish = ["crates-io"]
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
-documentation = "https://docs.rs/gpui-fast-macos/0.1.14/gpui_macos/"
+documentation = "https://docs.rs/gpui-fast-macos/0.1.16/gpui_macos/"
 description = "gpui_macos: GPUI with gpui-fast rendering and layout optimizations"
 autoexamples = false
 autobenches = false
@@ -32,7 +32,7 @@ screen-capture = ["gpui/screen-capture", "dep:objc2-core-media", "dep:objc2-scre
 [dependencies.gpui]
 default-features = false
 package = "gpui-fast"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui"
 
 [target."cfg(target_os = \"macos\")".dependencies.accesskit]
@@ -77,7 +77,7 @@ version = "0.3.34"
 
 [target."cfg(target_os = \"macos\")".dependencies.gpui_apple]
 package = "gpui-fast-apple"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_apple"
 
 [target."cfg(target_os = \"macos\")".dependencies.gpui_util]
@@ -106,33 +106,33 @@ default-features = false
 features = ["NSAlert", "NSAppearance", "NSApplication", "NSButton", "NSCell", "NSColor", "NSControl", "NSCursor", "NSDocumentController", "NSDragging", "NSDraggingItem", "NSEvent", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSScreen", "NSScroller", "NSTrackingArea", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-uniform-type-identifiers"]
 
 [target."cfg(target_os = \"macos\")".dependencies.objc2-core-graphics]
-version = "=0.3.2"
+version = "0.3.2"
 default-features = false
 features = ["CGDirectDisplay", "CGColor", "objc2"]
 
 [target."cfg(target_os = \"macos\")".dependencies.objc2-core-media]
-version = "=0.3.2"
+version = "0.3.2"
 default-features = false
 features = ["CMSampleBuffer", "objc2-core-video"]
 optional = true
 
 [target."cfg(target_os = \"macos\")".dependencies.objc2-core-video]
-version = "=0.3.2"
+version = "0.3.2"
 default-features = false
 features = ["CVBuffer", "CVImageBuffer", "CVHostTime"]
 
 [target."cfg(target_os = \"macos\")".dependencies.objc2-foundation]
-version = "=0.3.2"
+version = "0.3.2"
 default-features = false
 features = ["NSArray", "NSAttributedString", "NSBundle", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSNull", "NSObjCRuntime", "NSObject", "NSProcessInfo", "NSRange", "NSRunLoop", "NSSet", "NSString", "NSURL", "NSValue", "objc2-core-foundation", "std"]
 
 [target."cfg(target_os = \"macos\")".dependencies.objc2-quartz-core]
-version = "=0.3.2"
+version = "0.3.2"
 default-features = false
 features = ["std", "CALayer", "CAMetalDisplayLink", "CAMetalLayer", "objc2-metal"]
 
 [target."cfg(target_os = \"macos\")".dependencies.objc2-screen-capture-kit]
-version = "=0.3.2"
+version = "0.3.2"
 default-features = false
 features = ["block2", "dispatch2", "objc2-core-graphics", "objc2-core-media", "SCShareableContent", "SCStream", "std"]
 optional = true
@@ -160,6 +160,10 @@ version = "=0.3.12"
 [target."cfg(target_os = \"macos\")".dependencies.semver]
 version = "1.0"
 features = ["serde"]
+
+[target."cfg(target_os = \"macos\")".dependencies.serde_json]
+version = "1.0.144"
+features = ["preserve_order", "raw_value"]
 
 [target."cfg(target_os = \"macos\")".dependencies.smallvec]
 version = "1.6"

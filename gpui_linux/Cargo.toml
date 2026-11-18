@@ -1,14 +1,14 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast-linux"
-version = "0.1.14"
+version = "0.1.16"
 edition = "2024"
 publish = ["crates-io"]
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
-documentation = "https://docs.rs/gpui-fast-linux/0.1.14/gpui_linux/"
+documentation = "https://docs.rs/gpui-fast-linux/0.1.16/gpui_linux/"
 description = "gpui_linux: GPUI with gpui-fast rendering and layout optimizations"
 autoexamples = false
 autobenches = false
@@ -55,7 +55,7 @@ version = "0.3.34"
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.gpui]
 default-features = false
 package = "gpui-fast"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.gpui_util]
@@ -66,7 +66,7 @@ version = "=0.3.12"
 optional = true
 features = ["font-kit"]
 package = "gpui-fast-wgpu"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_wgpu"
 
 [target."cfg(any(target_os = \"linux\", target_os = \"freebsd\"))".dependencies.http_client]

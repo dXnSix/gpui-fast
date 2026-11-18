@@ -1,14 +1,14 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast-platform"
-version = "0.1.14"
+version = "0.1.16"
 edition = "2024"
 publish = ["crates-io"]
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
-documentation = "https://docs.rs/gpui-fast-platform/0.1.14/gpui_platform/"
+documentation = "https://docs.rs/gpui-fast-platform/0.1.16/gpui_platform/"
 description = "gpui_platform: GPUI with gpui-fast rendering and layout optimizations"
 autoexamples = false
 autobenches = false
@@ -39,13 +39,13 @@ version = "1.0.86"
 [dependencies.gpui]
 default-features = false
 package = "gpui-fast"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui"
 
 [target."cfg(target_os = \"macos\")".dependencies.gpui_macos]
 default-features = false
 package = "gpui-fast-macos"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_macos"
 
 [target."cfg(target_os = \"ios\")".dependencies.gpui_ios]
@@ -55,32 +55,32 @@ version = "=0.3.12"
 [target."cfg(target_os = \"windows\")".dependencies.gpui_windows]
 default-features = false
 package = "gpui-fast-windows"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_windows"
 
 [target."cfg(target_os = \"windows\")".dependencies.gpui]
 default-features = false
 features = ["windows-manifest"]
 package = "gpui-fast"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui"
 
 [target."cfg(all(any(target_os = \"linux\", target_os = \"freebsd\"), not(target_env = \"ohos\")))".dependencies.gpui_linux]
 default-features = false
 package = "gpui-fast-linux"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_linux"
 
 [target."cfg(target_os = \"linux\")".dependencies.gpui_wgpu]
 optional = true
 package = "gpui-fast-wgpu"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_wgpu"
 
 [target."cfg(target_family = \"wasm\")".dependencies.gpui_web]
 default-features = false
 package = "gpui-fast-web"
-version = "^0.1.14"
+version = "^0.1.16"
 path = "../gpui_web"
 
 [target."cfg(target_family = \"wasm\")".dependencies.console_error_panic_hook]
