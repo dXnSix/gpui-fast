@@ -317,7 +317,6 @@ pub struct WrapBoundary {
 
 impl WrappedLineLayout {
     /// The length of the underlying text, in utf8 bytes.
-    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.unwrapped_layout.len
     }

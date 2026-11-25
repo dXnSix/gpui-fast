@@ -44,9 +44,10 @@ mod capture;
 use capture::{PointerCapture, PointerOwner, PointerPhase, PointerRoute, route_pointer_event};
 
 use crate::{
-    renderer,
+    MetalFrames, renderer,
     window::{
-        MacWindowState, WINDOW_STATE_IVAR, drop_window_state, get_window_state, handle_view_event,
+        FrameSource, MacWindowState, WINDOW_STATE_IVAR, drop_window_state, get_window_state,
+        handle_view_event,
     },
 };
 
@@ -82,9 +83,32 @@ pub(crate) struct MacComposition {
     input_forwarders: FxHashSet<usize>,
     event_result: gpui::DispatchEventResult,
     forwarding_scroll: bool,
+    /// The window's Metal display link, set aside while it holds native
+    /// views (see [`follow_native_views`]).
+    metal_frames: Option<Rc<MetalFrames>>,
+    /// Whether the window's renderers present in the Core Animation
+    /// transaction (see [`set_presents_with_transaction`]).
+    presents_with_transaction: bool,
+    /// The native views that set their own cursor: those of `Native`
+    /// surfaces that do not forward their input to GPUI.
+    cursor_views: FxHashSet<usize>,
+    /// Whether the pointer was last over one of `cursor_views`, which then
+    /// sets the cursor (see [`follow_native_cursor`]).
+    native_cursor: bool,
+    /// Whether a native view or an overlay's input regions moved since the
+    /// last frame drawn, which may change what lies under a still pointer.
+    cursor_views_moved: bool,
 }
 
 impl MacComposition {
+    /// The native views to look for under the pointer after a frame, if it
+    /// moved a native view or an overlay's input regions and no press keeps
+    /// the cursor until its release.
+    fn take_cursor_check(&mut self) -> Option<Rc<Vec<usize>>> {
+        let moved = std::mem::take(&mut self.cursor_views_moved);
+        (moved && self.pointer_capture.owner().is_none()).then(|| self.native_views.clone())
+    }
+
     pub(crate) fn new(renderer_context: renderer::Context) -> Self {
         Self {
             base_surface: None,
@@ -92,6 +116,11 @@ impl MacComposition {
             renderer_context,
             view_order: Vec::new(),
             native_views: Rc::new(Vec::new()),
+            metal_frames: None,
+            presents_with_transaction: false,
+            cursor_views: FxHashSet::default(),
+            native_cursor: false,
+            cursor_views_moved: false,
             input_order: Rc::new(Vec::new()),
             native_event: 0,
             pointer_capture: PointerCapture::default(),
@@ -196,31 +225,22 @@ fn ivar<'a>(object: &'a AnyObject, name: &CStr) -> &'a objc2::runtime::Ivar {
         .expect("composition instance variable")
 }
 
-/// Native pointer input runs GPUI capture before AppKit delivers it.
-/// No handlers are run from hitTest, and no process-wide event monitor is installed.
-pub(crate) unsafe fn register_window_input(decl: &mut ClassBuilder, superclass: &AnyClass) {
-    extern "C" fn window(this: &AnyObject, _: Sel, event: Id) {
-        send_window_event(this, event, class!(NSWindow));
-    }
-    extern "C" fn panel(this: &AnyObject, _: Sel, event: Id) {
-        send_window_event(this, event, class!(NSPanel));
-    }
-    unsafe {
-        decl.add_ivar::<Bool>(NATIVE_INPUT_IVAR);
-        if superclass == class!(NSPanel) {
-            decl.add_method(sel!(sendEvent:), panel as extern "C" fn(_, Sel, _));
-        } else {
-            decl.add_method(sel!(sendEvent:), window as extern "C" fn(_, Sel, _));
-        }
-    }
+/// An inactive window takes the regular NativeView/AppKit event path without
+/// locking its state. Both integrations share the window's sendEvent: method.
+pub(crate) fn register_window_input(decl: &mut ClassBuilder) {
+    decl.add_ivar::<Bool>(NATIVE_INPUT_IVAR);
 }
 
-fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
+/// Returns true only when composition delivered or consumed the event.
+pub(crate) fn send_event(
+    this: &AnyObject,
+    event: Id,
+    superclass: &AnyClass,
+    state: &Rc<Mutex<MacWindowState>>,
+    clicked_native_view: Option<gpui::NativeViewId>,
+) -> bool {
     if !unsafe { *ivar(this, NATIVE_INPUT_IVAR).load::<Bool>(this) }.as_bool() {
-        unsafe {
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
-        }
-        return;
+        return false;
     }
     let kind: NSEventType = unsafe { msg_send![event, type] };
     let observe = matches!(
@@ -241,42 +261,56 @@ fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
     );
     let pointer = observe || wheel || dragged || kind == NSEventType::MouseMoved;
     if !pointer {
-        unsafe {
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
-        }
-        return;
+        return false;
     }
-    let button = if observe {
-        let number: NSInteger = unsafe { msg_send![event, buttonNumber] };
-        1u64.checked_shl(number as u32).unwrap_or(0)
+    let number: NSInteger = if observe || dragged {
+        unsafe { msg_send![event, buttonNumber] }
     } else {
         0
     };
+    let button = 1u64.checked_shl(number as u32).unwrap_or(0);
     let up = matches!(
         kind,
         NSEventType::LeftMouseUp | NSEventType::RightMouseUp | NSEventType::OtherMouseUp
     );
-    let state = unsafe { get_window_state(this) };
-    let (root, native_views, captured, has_forwarders) = {
-        let mut state = state.lock();
+    let (root, native_views, captured, has_forwarders, follows_cursor) = {
+        // AppKit can re-enter event delivery during a window state update.
+        let Some(mut state) = state.try_lock() else {
+            return false;
+        };
         if observe && !up {
             state
                 .fast_composition
                 .pointer_capture
                 .reconcile_down(button);
         }
+        // The AppKit view owns the continuation of its press, also when a
+        // drag crosses a composition surface. A held GPUI chord retains new
+        // downs over a view until its last button goes up.
+        if ((up || dragged) && state.native_view_tracks_button(number))
+            || (clicked_native_view.is_some()
+                && state.fast_composition.pointer_capture.owner() != Some(PointerOwner::Gpui))
+        {
+            return false;
+        }
+        let composition = &state.fast_composition;
         (
             state.native_view,
-            state.fast_composition.native_views.clone(),
-            state.fast_composition.pointer_capture.owner(),
-            !state.fast_composition.input_forwarders.is_empty(),
+            composition.native_views.clone(),
+            composition.pointer_capture.owner(),
+            !composition.input_forwarders.is_empty(),
+            !composition.cursor_views.is_empty() || composition.native_cursor,
         )
     };
+    // A release ends a drag that may have crossed into or out of a native
+    // view without a mouse move.
+    let under = (follows_cursor && (kind == NSEventType::MouseMoved || up))
+        .then(|| unsafe { native_under(root.as_ptr(), event, &native_views) });
+    if let Some(native) = under {
+        follow_native_cursor(state, native);
+    }
     if kind == NSEventType::MouseMoved && !has_forwarders {
-        unsafe {
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
-        }
-        return;
+        return false;
     }
     // A press on the window's own chrome (the resize border, the titlebar
     // buttons) belongs to AppKit, as in a window without composition.
@@ -288,10 +322,7 @@ fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
     // that does reach `sendEvent:` still takes the path below, which clears
     // the owner.
     if observe && !up && unsafe { hits_window_chrome(this, root.as_ptr(), event) } {
-        unsafe {
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
-        }
-        return;
+        return false;
     }
     if up {
         let mut state = state.lock();
@@ -320,15 +351,9 @@ fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
         captured,
         phase,
         || handle_view_event(unsafe { root.as_ref() }, sel!(sendEvent:), event),
-        || unsafe {
-            let parent: Id = msg_send![root.as_ptr(), superview];
-            let location: NSPoint = msg_send![event, locationInWindow];
-            let point: NSPoint = msg_send![parent, convertPoint: location, fromView: NIL];
-            let target: Id = msg_send![root.as_ptr(), hitTest: point];
-            native_for_target(target, &native_views)
-        },
+        || under.unwrap_or_else(|| unsafe { native_under(root.as_ptr(), event, &native_views) }),
     ) {
-        PointerRoute::Delivered => return,
+        PointerRoute::Delivered => return true,
         PointerRoute::AppKit(native) => native,
     };
     let forward =
@@ -372,7 +397,7 @@ fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
                 let mut state = state.lock();
                 state.fast_composition.pointer_capture.press(button, None);
             }
-            return;
+            return true;
         }
     }
     if native.is_none() {
@@ -383,10 +408,7 @@ fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
                 .pointer_capture
                 .press(button, None);
         }
-        unsafe {
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
-        }
-        return;
+        return false;
     }
     let previous = {
         let mut state = state.lock();
@@ -401,6 +423,7 @@ fn send_window_event(this: &AnyObject, event: Id, superclass: &AnyClass) {
         let _: () = msg_send![super(this, superclass), sendEvent: event];
     }
     state.lock().fast_composition.native_event = previous;
+    true
 }
 
 /// Whether AppKit hit-tests `event` outside the window's view `root`: to the
@@ -445,6 +468,102 @@ unsafe fn native_for_target(mut view: Id, native: &[usize]) -> Option<usize> {
         view = unsafe { msg_send![view, superview] };
     }
     None
+}
+
+/// The native view at `location`, in window coordinates, unless GPUI content
+/// of an overlay covers it there.
+unsafe fn native_at(root: Id, location: NSPoint, native: &[usize]) -> Option<usize> {
+    if native.is_empty() {
+        return None;
+    }
+    unsafe {
+        let parent: Id = msg_send![root, superview];
+        let point: NSPoint = msg_send![parent, convertPoint: location, fromView: NIL];
+        let target: Id = msg_send![root, hitTest: point];
+        native_for_target(target, native)
+    }
+}
+
+/// The native view under `event`'s pointer, as [`native_at`].
+unsafe fn native_under(root: Id, event: Id, native: &[usize]) -> Option<usize> {
+    unsafe { native_at(root, msg_send![event, locationInWindow], native) }
+}
+
+/// Leaves the cursor to `native`, the native view under the pointer, if it
+/// sets its own cursor, as a web view does: a pointing hand over a link, an
+/// I-beam over text. GPUIView covers the window with one cursor rect, which
+/// AppKit applies again as the pointer moves, so the view drops it while the
+/// pointer is over such a view ([`cursor_rect`]). The window's cursor rects
+/// stay enabled: WebKit sets no cursor in a window whose cursor rects are
+/// disabled. This runs on mouse moves and releases, and on the frames that
+/// move a native view or an overlay's input regions under a still pointer.
+fn follow_native_cursor(window_state: &Mutex<MacWindowState>, native: Option<usize>) {
+    let (window, root) = {
+        let mut state = window_state.lock();
+        let composition = &mut state.fast_composition;
+        let over = native.is_some_and(|view| composition.cursor_views.contains(&view));
+        if composition.native_cursor == over {
+            return;
+        }
+        composition.native_cursor = over;
+        (state.native_window, state.native_view)
+    };
+    unsafe {
+        let _: () = msg_send![window, invalidateCursorRectsForView: root.as_ptr()];
+    }
+}
+
+/// [`follow_native_cursor`] for where the pointer is now, once a frame moved
+/// a native view or an overlay's input regions.
+unsafe fn follow_native_cursor_now(window_state: &Mutex<MacWindowState>) {
+    if let Some(native) = unsafe { native_under_still_pointer(window_state) } {
+        follow_native_cursor(window_state, native);
+    }
+}
+
+/// The native view under the pointer, or `None` when there is nothing to
+/// follow (see [`MacComposition::take_cursor_check`]) or another window under
+/// the pointer sets its own cursor.
+unsafe fn native_under_still_pointer(
+    window_state: &Mutex<MacWindowState>,
+) -> Option<Option<usize>> {
+    let checked = {
+        let mut state = window_state.lock();
+        let (window, root) = (state.native_window, state.native_view);
+        state
+            .fast_composition
+            .take_cursor_check()
+            .map(|native_views| (window, root, native_views))
+    };
+    checked.and_then(|(window, root, native_views)| {
+        unsafe { pointer_location(window) }
+            .map(|location| unsafe { native_at(root.as_ptr(), location, &native_views) })
+    })
+}
+
+/// Where the pointer is in `window`, if no other window is above it there.
+unsafe fn pointer_location(window: *mut AnyObject) -> Option<NSPoint> {
+    unsafe {
+        let screen: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let under: NSInteger = msg_send![
+            class!(NSWindow),
+            windowNumberAtPoint: screen,
+            belowWindowWithWindowNumber: 0 as NSInteger
+        ];
+        let own: NSInteger = msg_send![window, windowNumber];
+        (under == own).then(|| msg_send![window, mouseLocationOutsideOfEventStream])
+    }
+}
+
+/// The rect the window's view adds its cursor rect over: its `bounds`, or none
+/// while it leaves the cursor to the native view under the pointer (see
+/// [`follow_native_cursor`]).
+pub(crate) fn cursor_rect(state: &Mutex<MacWindowState>, bounds: NSRect) -> NSRect {
+    if state.lock().fast_composition.native_cursor {
+        NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.))
+    } else {
+        bounds
+    }
 }
 
 /// AppKit may consume releases during deactivation or a native tracking loop.
@@ -600,6 +719,13 @@ extern "C" fn dealloc_overlay_view(this: &AnyObject, _: Sel) {
 /// scene with that surface's renderer, or the whole scene on the window's
 /// view until the window composes.
 pub(crate) fn draw_composed(window_state: &Rc<Mutex<MacWindowState>>, scene: ComposedScene<'_>) {
+    draw_surfaces(window_state, scene);
+    // After the overlays' input regions are written: a GPUI overlay opened
+    // under a still pointer takes the cursor back from the view below.
+    unsafe { follow_native_cursor_now(window_state) };
+}
+
+fn draw_surfaces(window_state: &Rc<Mutex<MacWindowState>>, scene: ComposedScene<'_>) {
     let mut lock = window_state.lock();
     let state = &mut *lock;
     let Some(base_surface) = state.fast_composition.base_surface else {
@@ -625,12 +751,21 @@ pub(crate) fn draw_composed(window_state: &Rc<Mutex<MacWindowState>>, scene: Com
         if layer.surface == base_surface {
             state.renderer.draw(surface_scene);
         } else if let Some(surface) = state.fast_composition.gpui_surfaces.get_mut(&layer.surface) {
-            {
+            let moved = {
+                let hitboxes = scene.layer_hitboxes(layer);
                 let mut regions = surface.input_regions.borrow_mut();
+                let moved = regions.len() != hitboxes.len()
+                    || regions
+                        .iter()
+                        .zip(hitboxes)
+                        .any(|(old, new)| old.bounds != new.bounds);
                 regions.clear();
-                regions.extend(scene.layer_hitboxes(layer).iter().cloned());
-            }
+                regions.extend(hitboxes.iter().cloned());
+                moved
+            };
             surface.renderer.draw(surface_scene);
+            let composition = &mut state.fast_composition;
+            composition.cursor_views_moved |= moved && !composition.cursor_views.is_empty();
         } else {
             log::error!(
                 "missing AppKit GPUI composition surface {:?}",
@@ -705,6 +840,19 @@ pub(crate) fn create_native_surface(
 /// GPUI surfaces, then puts every surface's view under its parent's, in
 /// order, at its bounds.
 pub(crate) fn set_composition_order(
+    window_state: &Rc<Mutex<MacWindowState>>,
+    surfaces: &[PlatformCompositionSurface],
+) -> Result<()> {
+    let ordered = order_surfaces(window_state, surfaces);
+    // Once the last cursor view goes, the window draws without
+    // `draw_composed`, so GPUIView takes the cursor back here.
+    if window_state.lock().fast_composition.cursor_views.is_empty() {
+        follow_native_cursor(window_state, None);
+    }
+    ordered
+}
+
+fn order_surfaces(
     window_state: &Rc<Mutex<MacWindowState>>,
     surfaces: &[PlatformCompositionSurface],
 ) -> Result<()> {
@@ -834,22 +982,30 @@ pub(crate) fn set_composition_order(
             if lock.fast_composition.native_views.is_empty() {
                 lock.fast_composition.pointer_capture.clear();
             }
+            follow_native_views(&mut lock, window_state);
             lock.fast_composition.view_order = view_order;
         }
-        lock.fast_composition.input_forwarders.clear();
-        for surface in surfaces.iter().filter(|surface| match &surface.content {
-            PlatformCompositionSurfaceContent::Native(attachment)
-            | PlatformCompositionSurfaceContent::ExternalGpu(attachment) => {
-                attachment.input_forwarding()
-            }
-            PlatformCompositionSurfaceContent::Gpui => false,
-        }) {
-            if let Some(view) = views_by_id.get(&surface.id) {
-                lock.fast_composition
-                    .input_forwarders
-                    .insert(*view as usize);
+        let composition = &mut lock.fast_composition;
+        composition.input_forwarders.clear();
+        composition.cursor_views.clear();
+        for surface in surfaces {
+            let (attachment, sets_cursor) = match &surface.content {
+                PlatformCompositionSurfaceContent::Native(attachment) => (attachment, true),
+                PlatformCompositionSurfaceContent::ExternalGpu(attachment) => (attachment, false),
+                PlatformCompositionSurfaceContent::Gpui => continue,
+            };
+            let Some(view) = views_by_id.get(&surface.id).map(|view| *view as usize) else {
+                continue;
+            };
+            if attachment.input_forwarding() {
+                composition.input_forwarders.insert(view);
+            } else if sets_cursor {
+                composition.cursor_views.insert(view);
             }
         }
+        // The order is set when native views move, and the frame drawn next
+        // follows them.
+        composition.cursor_views_moved = !composition.cursor_views.is_empty();
         let window: Id = msg_send![native_view, window];
         if let Some(window) = window.as_ref() {
             ivar(window, NATIVE_INPUT_IVAR)
@@ -887,6 +1043,7 @@ unsafe fn create_gpui_surface(
         state.fast_composition.renderer_context.clone(),
         &state.renderer,
     )?;
+    renderer.set_presents_with_transaction(state.fast_composition.presents_with_transaction);
     let input_regions = Rc::new(RefCell::new(Vec::<gpui::Hitbox>::new()));
     let native_view = state.native_view.as_ptr();
     let class = OVERLAY_VIEW_CLASS.load(Ordering::Acquire).cast_const();
@@ -930,10 +1087,78 @@ unsafe fn create_gpui_surface(
     })
 }
 
+/// Paces the window's frames to fit its native views. A `CAMetalDisplayLink`
+/// presents each drawable a refresh after the Core Animation transaction
+/// that moves the window's native views, so they would lead the GPUI content
+/// around them by a frame while it scrolls. While the window holds native
+/// views it draws from the `CVDisplayLink` instead, presenting in that
+/// transaction (see [`present_for_native_views`]), and gets its Metal link
+/// back once they are gone. The switch waits for the frame being drawn to
+/// end: a Metal link attached during a frame would skip that frame.
+fn follow_native_views(state: &MacWindowState, window_state: &Rc<Mutex<MacWindowState>>) {
+    if !needs_other_frame_source(state) {
+        return;
+    }
+    let window_state = Rc::downgrade(window_state);
+    state
+        .foreground_executor
+        .spawn(async move {
+            if let Some(window_state) = window_state.upgrade() {
+                switch_frame_source(&mut window_state.lock(), &window_state);
+            }
+        })
+        .detach();
+}
+
+fn needs_other_frame_source(state: &MacWindowState) -> bool {
+    let native = !state.fast_composition.native_views.is_empty();
+    match &state.frame_source {
+        FrameSource::Metal(_) => native,
+        FrameSource::DisplayLink(_) => !native && state.fast_composition.metal_frames.is_some(),
+    }
+}
+
+fn switch_frame_source(state: &mut MacWindowState, window_state: &Rc<Mutex<MacWindowState>>) {
+    if !needs_other_frame_source(state) {
+        return;
+    }
+    let frame_source = match &state.frame_source {
+        FrameSource::Metal(metal_frames) => {
+            // Detached rather than paused, as `stop_display_link` does, so
+            // that the renderer takes the layer's own drawables again.
+            metal_frames.replace(None);
+            state.renderer.set_display_link_attached(false);
+            state.fast_composition.metal_frames = Some(metal_frames.clone());
+            FrameSource::DisplayLink(None)
+        }
+        FrameSource::DisplayLink(_) => {
+            let Some(metal_frames) = state.fast_composition.metal_frames.take() else {
+                return;
+            };
+            set_presents_with_transaction(state, false);
+            FrameSource::Metal(metal_frames)
+        }
+    };
+    // Replacing a `CVDisplayLink` source drops it, which leaves the registry.
+    state.frame_source = frame_source;
+    state.start_display_link(window_state);
+}
+
+/// Before a frame drawn from the `CVDisplayLink`: while the window holds
+/// native views, its drawables reach the screen in the Core Animation
+/// transaction that moves them.
+pub(crate) fn present_for_native_views(state: &mut MacWindowState) {
+    let native = !state.fast_composition.native_views.is_empty();
+    if state.fast_composition.presents_with_transaction != native {
+        set_presents_with_transaction(state, native);
+    }
+}
+
 /// Sets whether the window's renderer and every surface's present their
 /// drawables in a Core Animation transaction, as they do while AppKit waits
 /// for the window to draw.
 pub(crate) fn set_presents_with_transaction(state: &mut MacWindowState, enabled: bool) {
+    state.fast_composition.presents_with_transaction = enabled;
     state.renderer.set_presents_with_transaction(enabled);
     for surface in state.fast_composition.gpui_surfaces.values_mut() {
         surface.renderer.set_presents_with_transaction(enabled);

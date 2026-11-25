@@ -44,6 +44,14 @@ const PROMOTE_AFTER_SCROLLED_FRAMES: u8 = 2;
 /// A layer whose content changed on at least this many of the last 16
 /// frames is demoted. Include the halfway boundary at 120 Hz.
 const DEMOTE_AFTER_CHANGED_FRAMES: u32 = 8;
+/// A list's layer whose content changed on at least this many of the last 16
+/// frames is demoted. A list changing on every other frame, as a feed of 60
+/// updates a second does at 120 Hz, composites the frames between and keeps
+/// its layer; one changing on every frame, as a list following its tail or
+/// moving its selection does, composites none, and painting its rows afresh
+/// costs more than drawing them without the layer (see
+/// [`crate::fast::layers::work::REPAINT_COST`]).
+const LIST_DEMOTE_AFTER_CHANGED_FRAMES: u32 = 14;
 /// How many frames a demoted container's content must be stable for before
 /// it may get a layer again.
 const REPROMOTE_AFTER_STABLE_FRAMES: u64 = 60;
@@ -104,6 +112,16 @@ pub(crate) struct LayerPolicy {
     /// Whether the content, as last painted into the layer, prepainted an
     /// anchored element.
     content_anchored: bool,
+    /// How many surfaces the window had placed when the container was last
+    /// looked at, before its content was prepainted. See
+    /// [`note_surfaces_placed`].
+    surfaces_placed: u64,
+    /// Whether the content, last prepainted without a layer, placed a
+    /// native or external GPU surface. A layer is not tried while it does:
+    /// the frame trying it prepaints the content under the layer's wider
+    /// mask, which a web view takes for its clip and would show outside the
+    /// container for that frame. See [`note_surfaces_without_layer`].
+    surfaces_without_layer: bool,
     /// Recent rebuilding work, relative to drawing the visible content.
     work: WorkBudget,
     /// Backoff survives dropping the record and its cached rows.
@@ -224,11 +242,13 @@ pub(crate) fn decide(
         1
     };
     // A list's layer replays its rows (see
-    // [`crate::fast::layers::paint::replays`]): it costs no more than drawing
-    // them without it, so it is not demoted for what it costs or for changing
-    // often, and has no tiles to keep within budget.
+    // [`crate::fast::layers::paint::replays`]): a frame that keeps them costs
+    // no more than drawing the list without it, so it is not demoted for its
+    // estimated work, and has no tiles to keep within budget. It is demoted
+    // for content that changes on nearly every frame (see
+    // [`LIST_DEMOTE_AFTER_CHANGED_FRAMES`]).
     let replayed = layer.rows.list;
-    let mut demoted_until = if replayed { None } else { policy.demoted_until };
+    let mut demoted_until = policy.demoted_until;
     let changed_while_demoted =
         demoted_until.is_some() && invalidate::changed_without_layer(window, cx, id);
     if changed_while_demoted {
@@ -303,7 +323,8 @@ pub(crate) fn decide(
             Decision::Repaint
         }
         None if streak >= PROMOTE_AFTER_SCROLLED_FRAMES
-            && retry_at.is_none_or(|at| frame >= at) =>
+            && retry_at.is_none_or(|at| frame >= at)
+            && !policy.surfaces_without_layer =>
         {
             Decision::Repaint
         }
@@ -316,12 +337,18 @@ pub(crate) fn decide(
         .unwrap_or_default();
     if changed {
         history |= 1;
-        demote |= !replayed && history.count_ones() >= DEMOTE_AFTER_CHANGED_FRAMES;
+        let changed_frames = if replayed {
+            LIST_DEMOTE_AFTER_CHANGED_FRAMES
+        } else {
+            DEMOTE_AFTER_CHANGED_FRAMES
+        };
+        demote |= history.count_ones() >= changed_frames;
     }
     let decision = if demote { Decision::Bypass } else { decision };
 
     let starting_cache = decision == Decision::Repaint && layer.record.is_none();
     let owner = invalidate::owner_view(window);
+    let surfaces_placed = crate::fast::composition::surfaces_placed(window);
     let layer = window.fast_layers.layers.get_mut(id).unwrap();
     layer.rows.rerendered = rerendered && decision == Decision::Composite;
     let policy = &mut layer.policy;
@@ -334,6 +361,7 @@ pub(crate) fn decide(
         policy.last_scrolled_frame = Some(frame);
     }
     policy.last_seen_frame = frame;
+    policy.surfaces_placed = surfaces_placed;
     policy.last_offset = Some(scroll_offset);
     policy.last_decision = Some(decision);
     policy.change_history = history;
@@ -430,6 +458,40 @@ pub(crate) fn note_unchanged_repaint(window: &mut Window, id: &GlobalElementId) 
     }
 }
 
+/// Notes that the content of the container `id`, prepainted into its layer
+/// since the container was looked at, placed a native or external GPU
+/// surface (a web view), if it did. A composited frame does not prepaint the
+/// content and would leave the surface where it was, so the container is
+/// kept off its layer as for an anchored element.
+pub(crate) fn note_surfaces_placed(window: &mut Window, id: &GlobalElementId) {
+    let placed = crate::fast::composition::surfaces_placed(window);
+    let layers = &mut window.fast_layers;
+    if layers
+        .layers
+        .get(id)
+        .is_some_and(|layer| layer.policy.surfaces_placed != placed)
+    {
+        layers.scrolls.anchored.push(id.clone());
+    }
+}
+
+/// Notes whether the content of the container `id`, prepainted without its
+/// layer since the container was looked at this frame, placed a native or
+/// external GPU surface. Called where such a prepaint ends; the container
+/// is not promoted while its content holds one (see
+/// [`LayerPolicy::surfaces_without_layer`]).
+pub(crate) fn note_surfaces_without_layer(window: &mut Window, id: &GlobalElementId) {
+    let placed = crate::fast::composition::surfaces_placed(window);
+    let frame = window.fast_layers.frame;
+    if let Some(layer) = window.fast_layers.layers.get_mut(id)
+        && layer.record.is_none()
+        && layer.policy.last_seen_frame == frame
+        && layer.policy.last_decision == Some(Decision::Bypass)
+    {
+        layer.policy.surfaces_without_layer = layer.policy.surfaces_placed != placed;
+    }
+}
+
 /// Records work completed for the layer in this frame. One unit is the
 /// work of drawing its visible content directly; overscan and rows rebuilt
 /// for hover count too. The next prepaint can fall back before doing more.
@@ -462,9 +524,9 @@ fn fits(window: &Window, record: &LayerRecord) -> bool {
 
 /// Whether the content `record` holds of the scroll container `id` can be
 /// composited from a layer this frame (spec §5.6, §6.5): it deferred no
-/// draws (anchored popovers), placed no anchored element, handles no text
-/// input (a focused input is inside), and nothing in it asked for an
-/// animation frame.
+/// draws (anchored popovers), placed no anchored element or native surface,
+/// handles no text input (a focused input is inside), and nothing in it
+/// asked for an animation frame.
 fn eligible(
     window: &Window,
     id: &GlobalElementId,

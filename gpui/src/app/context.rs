@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 use crate::{
     AnyView, AnyWindowHandle, AppContext, AsyncApp, DispatchPhase, Effect, EntityId, EventEmitter,
     FocusHandle, FocusOutEvent, Focusable, Global, Priority, Reservation, Subscription, Task,
@@ -168,11 +169,11 @@ impl<'a, T: 'static> Context<'a, T> {
         T: 'static,
     {
         let handle = self.weak_entity();
-        let (subscription, activate) = self.global_observers.insert_pending(
+        let subscription = crate::fast::observers::observe_global(
+            self,
             TypeId::of::<G>(),
             Box::new(move |cx| handle.update(cx, |view, cx| f(view, cx)).is_ok()),
         );
-        self.defer(move |_| activate());
         subscription
     }
 
@@ -683,7 +684,8 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Subscription {
         let window_handle = window.handle;
         let view = self.weak_entity();
-        let (subscription, activate) = self.global_observers.insert_pending(
+        let subscription = crate::fast::observers::observe_global(
+            self,
             TypeId::of::<G>(),
             Box::new(move |cx| {
                 // If the entity has been dropped, remove this observer.
@@ -701,7 +703,6 @@ impl<'a, T: 'static> Context<'a, T> {
                 entity_alive
             }),
         );
-        self.defer(move |_| activate());
         subscription
     }
 

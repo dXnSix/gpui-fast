@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 //! Frame pacing for macOS windows.
 //!
 //! On macOS 14 and later a window is paced by a `CAMetalDisplayLink` on its
@@ -311,6 +312,10 @@ pub struct MetalFrames {
 impl MetalFrames {
     pub fn replace(&self, source: Option<MetalFrameSource>) {
         *self.source.borrow_mut() = source;
+    }
+
+    pub(crate) fn set_paused(&self, paused: bool) {
+        crate::fast::display_link_lifecycle::set_metal_frames_paused(&self.source, paused);
     }
 
     pub fn is_attached(&self) -> bool {

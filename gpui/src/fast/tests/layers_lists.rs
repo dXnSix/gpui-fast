@@ -320,6 +320,66 @@ mod uniform {
         assert_eq!(decision(cx, window), Some(Decision::Repaint));
     }
 
+    /// A uniform list whose row 1 hosts a native surface, as a web view in a
+    /// row does.
+    struct SurfacePage {
+        surface: Rc<dyn crate::PlatformSurfaceAttachment>,
+    }
+
+    impl Render for SurfacePage {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let surface = self.surface.clone();
+            div().size_full().bg(rgb(0xffffff)).child(
+                crate::uniform_list("list", 1000, move |range: Range<usize>, _, _| {
+                    range
+                        .map(|row| {
+                            let cell = div()
+                                .w(px(VIEWPORT_WIDTH))
+                                .h(px(ROW_HEIGHT))
+                                .bg(row_color(row));
+                            if row == 1 {
+                                cell.child(crate::fast::composition::tests::native_host(
+                                    surface.clone(),
+                                ))
+                            } else {
+                                cell
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .w(px(VIEWPORT_WIDTH))
+                .h(px(VIEWPORT_HEIGHT)),
+            )
+        }
+    }
+
+    /// A shown row holding a web view keeps the list from trying its layer,
+    /// retries included: the frame trying it would prepaint the row under the
+    /// layer's wider mask, the web view's clip (gpui-kit#4057). Once the row
+    /// scrolls out of view the layer is tried and composited.
+    #[crate::test]
+    fn a_native_surface_in_a_shown_row_keeps_the_list_from_trying_its_layer(
+        cx: &mut TestAppContext,
+    ) {
+        if !crate::fast::layers::COMPILED {
+            return;
+        }
+        let window = cx.add_window(|window, _| SurfacePage {
+            surface: crate::fast::composition::tests::native_surface(window),
+        });
+        let window: AnyWindowHandle = window.into();
+        open_at(cx, window, 1.);
+        for step in 0..40 {
+            wheel(cx, window, if step % 2 == 0 { -1. } else { 1. });
+            assert_eq!(decision(cx, window), Some(Decision::Bypass), "step {step}");
+        }
+        let composited = (0..40).any(|_| {
+            wheel(cx, window, -ROW_HEIGHT);
+            decision(cx, window) == Some(Decision::Composite)
+        });
+        assert!(composited, "the layer is composited once the row is gone");
+    }
+
     /// A list whose rows are coloured by state outside entities, which only
     /// `window.refresh()` tells the framework changed.
     struct UntrackedPage {
@@ -561,48 +621,84 @@ mod uniform {
         let (handle, log) = page(cx, 1000);
         let window = handle.into();
         promote(cx, window);
-        // Rows 2..7 show, and ten rows of overscan below them and above them,
-        // as far as row 0. Row 1 showed in the frame before, and was left out:
-        // painted into the layer, it could have kept element states that a
-        // list without a layer drops.
-        let mut expected: Vec<usize> = [0].into_iter().chain(2..17).collect();
-        assert_eq!(held_rows(cx, window), expected);
+        // Rows 2..7 show, and the layer holds those alone: the ten rows of
+        // overscan below them and above them are not painted in the frame
+        // that promotes the layer, which would be five viewports of rows in
+        // one frame.
+        assert_eq!(held_rows(cx, window), (2..7).collect::<Vec<_>>());
         rendered_rows(&log);
 
-        wheel(cx, window, -ROW_HEIGHT);
-        assert_eq!(decision(cx, window), Some(Decision::Composite));
-        assert_eq!(
-            rendered_rows(&log),
-            vec![1..2, 17..18],
-            "the row left out is rendered, and the row entering the overscan"
-        );
-
-        for step in 0..14 {
+        // The frames after grow the overscan, each rendering three quarters
+        // of a viewport's rows at most, three of the five: the row its
+        // scroll shows first, then overscan, until the ten rows below the
+        // rows shown are held.
+        let mut shown_end = 7;
+        let mut frames = 0;
+        loop {
             wheel(cx, window, -ROW_HEIGHT);
+            shown_end += 1;
+            frames += 1;
             assert_eq!(decision(cx, window), Some(Decision::Composite));
-            let new_row = 18 + step;
+            let rendered: usize = rendered_rows(&log).iter().map(Range::len).sum();
+            assert!(
+                (1..=3).contains(&rendered),
+                "frame {frames}: {rendered} rows rendered"
+            );
+            let held = held_rows(cx, window);
+            if held.last() == Some(&(shown_end + 9)) && held.first() == Some(&0) {
+                break;
+            }
+            assert!(frames < 20, "the overscan never grew whole: {held:?}");
+        }
+
+        // Whole, the overscan grows by the row entering it. Rows that left it
+        // are kept until they are more than a quarter of the rows the layer
+        // is to hold, 25, then dropped together.
+        let mut dropped = false;
+        for step in 0..30 {
+            let before = held_rows(cx, window);
+            wheel(cx, window, -ROW_HEIGHT);
+            shown_end += 1;
+            assert_eq!(decision(cx, window), Some(Decision::Composite));
+            let new_row = shown_end + 9;
             assert_eq!(
                 rendered_rows(&log),
                 vec![new_row..new_row + 1],
                 "step {step}: scrolling down one row renders the row entering the overscan"
             );
-            // Rows that left the overscan are kept until they are more than
-            // a quarter of the rows the layer is to hold, then dropped.
-            let first = if step < 13 { 0 } else { new_row - 24 };
-            expected = (first..new_row + 1).collect();
-            assert_eq!(held_rows(cx, window), expected, "step {step}");
+            let held = held_rows(cx, window);
+            let first = held[0];
+            assert_eq!(
+                held,
+                (first..new_row + 1).collect::<Vec<_>>(),
+                "step {step}"
+            );
+            assert!(held.len() <= 31, "step {step}: {} rows held", held.len());
+            if first != before[0] {
+                assert_eq!(
+                    held.len(),
+                    25,
+                    "step {step}: dropped to the rows it is to hold"
+                );
+                dropped = true;
+                break;
+            }
         }
-        // Rows 17..22 show.
-        assert_eq!(held_rows(cx, window), (7..32).collect::<Vec<_>>());
+        assert!(dropped, "rows that left the overscan were never dropped");
 
+        let held = held_rows(cx, window);
+        let (first, last) = (held[0], held[held.len() - 1]);
         wheel(cx, window, ROW_HEIGHT);
         assert_eq!(decision(cx, window), Some(Decision::Composite));
         assert_eq!(
             rendered_rows(&log),
-            vec![6..7],
+            vec![first - 1..first],
             "scrolling up one row renders the dropped row entering the overscan"
         );
-        assert_eq!(held_rows(cx, window), (6..32).collect::<Vec<_>>());
+        assert_eq!(
+            held_rows(cx, window),
+            (first - 1..last + 1).collect::<Vec<_>>()
+        );
 
         // Rows 16..21 show; a quarter of a row down, 16..22 do, all held.
         for _ in 0..2 {
@@ -794,6 +890,62 @@ mod uniform {
         assert_eq!(measured(&log), 2, "a frame that changed measures again");
     }
 
+    /// A list whose content changes on every frame, as one following its tail
+    /// or moving its selection does, composites none of them, and painting
+    /// its rows afresh costs more than drawing them without the layer: it is
+    /// demoted, as a div is.
+    #[crate::test]
+    fn a_list_whose_content_changes_on_every_frame_is_demoted(cx: &mut TestAppContext) {
+        if !crate::fast::layers::COMPILED {
+            return;
+        }
+        let (handle, _log) = page(cx, 1000);
+        let window: AnyWindowHandle = handle.into();
+        let demoted = |cx: &mut TestAppContext| {
+            with_window(cx, window, |window, _| window.layout_stats().layers_demoted)
+        };
+        promote(cx, window);
+        let before = demoted(cx);
+        for _ in 0..16 {
+            let frame = with_window(cx, window, |window, _| window.fast_layers.frame);
+            handle
+                .update(cx, |page, _, cx| {
+                    page.row_height = if page.row_height == ROW_HEIGHT {
+                        ROW_HEIGHT + 1.
+                    } else {
+                        ROW_HEIGHT
+                    };
+                    cx.notify();
+                })
+                .unwrap();
+            if with_window(cx, window, |window, _| window.fast_layers.frame) == frame {
+                draw(cx, window);
+            }
+        }
+        assert_eq!(decision(cx, window), Some(Decision::Bypass));
+        assert_eq!(demoted(cx), before + 1);
+    }
+
+    /// A list flung a viewport a frame shows new rows on every frame. The
+    /// layout nodes of the rows it passed are kept, to be found again if it
+    /// scrolls back, but not those of all 240 frames.
+    #[crate::test]
+    fn a_flung_list_keeps_a_bounded_number_of_row_nodes(cx: &mut TestAppContext) {
+        // Rows one pixel tall: a hundred to the viewport.
+        let (handle, _log) = page_with_rows_of(cx, 100_000, 1., 1.);
+        let window: AnyWindowHandle = handle.into();
+        for _ in 0..240 {
+            wheel(cx, window, -VIEWPORT_HEIGHT);
+        }
+        let held = with_window(cx, window, |window, _| window.layout_node_count());
+        let most = crate::fast::layout::LIST_ROW_NODE_LINGER_MAX;
+        assert!(held <= most + 500, "{held} nodes held");
+        assert!(
+            held > most / 2,
+            "{held} nodes held: the rows last passed are kept"
+        );
+    }
+
     /// The second scrolled frame, which promotes the list.
     fn promote_from_second_frame(cx: &mut TestAppContext, window: AnyWindowHandle) {
         wheel(cx, window, -ROW_HEIGHT);
@@ -808,7 +960,13 @@ mod uniform {
         let (handle, log) = page(cx, 1000);
         let window = handle.into();
         promote(cx, window);
-        wheel(cx, window, -ROW_HEIGHT);
+        // The frames after the one promoting the layer grow its overscan,
+        // several rows a frame, whatever they scroll by: three rows of
+        // scrolling in quarters of a row leave it whole, so that a scroll of
+        // one row then adds the one row entering it.
+        for _ in 0..12 {
+            wheel(cx, window, -ROW_HEIGHT / 4.);
+        }
         let parts = |cx: &mut TestAppContext| {
             with_window(cx, window, |window, _| {
                 let layer = window.fast_layers.layers.values().next().unwrap();
@@ -1944,11 +2102,13 @@ mod list {
     }
 
     /// A row in a view of its own, of `color`, that asks for an animation
-    /// frame each time it renders when it `animate`s, and holds an anchored
-    /// element when it is `anchored`.
+    /// frame each time it renders when it `animate`s, holds an anchored
+    /// element when it is `anchored`, and hosts its native `surface`, if
+    /// any.
     struct Ticker {
         animate: bool,
         anchored: bool,
+        surface: Option<Rc<dyn crate::PlatformSurfaceAttachment>>,
         color: usize,
     }
 
@@ -1963,6 +2123,9 @@ mod list {
                 .bg(row_color(self.color))
                 .when(self.anchored, |row| {
                     row.child(crate::anchored().child(div().w(px(50.)).h(px(50.)).bg(crate::red())))
+                })
+                .when_some(self.surface.clone(), |row, surface| {
+                    row.child(crate::fast::composition::tests::native_host(surface))
                 })
         }
     }
@@ -2001,10 +2164,11 @@ mod list {
         anchored: bool,
     ) -> (AnyWindowHandle, Entity<Ticker>) {
         let handle = cx.add_window(move |_, cx| TickerListPage {
-            state: ListState::new(300, ListAlignment::Top, px(0.)),
+            state: ListState::new(300, ListAlignment::Top, px(0.)).measure_all(),
             ticker: cx.new(|_| Ticker {
                 animate,
                 anchored,
+                surface: None,
                 color: 2,
             }),
         });
@@ -2085,6 +2249,44 @@ mod list {
         for step in 0..3 {
             wheel(cx, window, -2.);
             assert_eq!(decision(cx, window), Some(Decision::Bypass), "step {step}");
+        }
+    }
+
+    #[crate::test]
+    fn a_native_surface_in_a_row_keeps_the_list_off_its_layer(cx: &mut TestAppContext) {
+        if !crate::fast::layers::COMPILED {
+            return;
+        }
+        // A web view in a row the layer holds: placed where the row is
+        // prepainted, which a composited frame skips, leaving it where the
+        // row was.
+        let (window, ticker) = ticker_page(cx, false, false);
+        let surface = with_window(cx, window, |window, _| {
+            crate::fast::composition::tests::native_surface(window)
+        });
+        // Drawn at once, in a frame that composites the layer and renders the
+        // ticker again, alone, placing its surface.
+        ticker.update(cx, |ticker, cx| {
+            ticker.surface = Some(surface.clone());
+            cx.notify();
+        });
+        let page = window.downcast::<TickerListPage>().unwrap();
+        // Nor is the layer tried again while the row holds it, its retries
+        // included (gpui-kit#4057).
+        for step in 0..40 {
+            wheel(cx, window, if step % 2 == 0 { -2. } else { 2. });
+            assert_eq!(decision(cx, window), Some(Decision::Bypass), "step {step}");
+            let top = page
+                .update(cx, |page, _, _| page.state.logical_scroll_top())
+                .unwrap();
+            let scale = with_window(cx, window, |window, _| window.scale_factor());
+            // The ticker is row 2, under two rows 20 px tall.
+            let y = (2. - top.item_ix as f32) * 20. - top.offset_in_item.0;
+            assert_eq!(
+                surface.bounds().origin.y,
+                crate::DevicePixels((y * scale).round() as i32),
+                "step {step}: the surface moves with the row"
+            );
         }
     }
 
@@ -2787,10 +2989,11 @@ mod rows {
                             } else {
                                 30.
                             };
-                            let mut path = crate::Path::new(origin);
+                            let mut path = crate::PathBuilder::fill();
+                            path.move_to(origin);
                             path.line_to(origin + crate::point(px(30.), px(0.)));
                             path.line_to(origin + crate::point(px(0.), px(reach)));
-                            window.paint_path(path, crate::black());
+                            window.paint_path(path.build().expect("path"), crate::black());
                             window.paint_quad(crate::fill(
                                 crate::Bounds::new(
                                     origin + crate::point(px(2.), px(2.)),

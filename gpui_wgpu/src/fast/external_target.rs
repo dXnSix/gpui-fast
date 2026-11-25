@@ -384,11 +384,11 @@ impl WgpuExternalRenderer {
 
     /// Frees the target-sized textures the renderer keeps (the app is paused,
     /// its surface released): the texture a flipped target is drawn through
-    /// and the path intermediates. The next frame makes them again and is
+    /// and the depth attachments. The next frame makes them again and is
     /// drawn whole.
     pub fn release_targets(&mut self) {
         self.invalidate();
-        self.core.resources.invalidate_intermediate_textures();
+        self.core.fast_frame.depth = Default::default();
     }
 
     /// Draws `scene` into `target`, a view of a `size` texture whose contents
@@ -591,7 +591,7 @@ impl WgpuExternalRenderer {
         self.core.fast_frame.partial = partial;
         let result = self
             .core
-            .render_frame(scene, view, size, false, wgpu::Color::TRANSPARENT);
+            .render_frame(scene, view, size, wgpu::Color::TRANSPARENT);
         self.core.fast_frame.partial = None;
         result.map(|_| ())
     }

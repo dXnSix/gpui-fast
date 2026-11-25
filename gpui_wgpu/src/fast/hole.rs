@@ -17,10 +17,8 @@ use gpui::AtlasTextureId;
 const SHADER: &str = r#"
 @fragment
 fn fs_hole(input: PolySpriteVarying) -> @location(0) vec4<f32> {
-    if (any(input.clip_distances < vec4<f32>(0.0))) {
-        return vec4<f32>(0.0);
-    }
-    let sprite = load_poly_sprite(input.sprite_id);
+    // The vertex shader clipped the sprite to its content mask.
+    let sprite = load_poly_sprite(input.sprite_id & ~SIMPLE_PRIMITIVE_FLAG);
     let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
     return fast_clip_color(vec4<f32>(0.0, 0.0, 0.0, saturate(0.5 - distance)), input.position.xy, true);
 }
@@ -58,8 +56,10 @@ pub(crate) fn pipeline(
     layouts: &crate::wgpu_renderer::WgpuBindGroupLayouts,
     module: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
-    cache: Option<&wgpu::PipelineCache>,
 ) -> Holes {
+    // The renderer's other pipelines are created from the same cache.
+    let cache = crate::fast::pipeline_cache::get(device);
+    let cache = cache.as_ref();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("hole_texture"),
         size: wgpu::Extent3d {
@@ -130,7 +130,14 @@ pub(crate) fn pipeline(
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
-        depth_stencil: None,
+        // As the polychrome sprites': tested against the quads' depths, never written.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: crate::wgpu_renderer::DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache,

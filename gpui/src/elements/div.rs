@@ -2117,10 +2117,6 @@ impl Element for Div {
             (child_max - child_min).into()
         };
 
-        if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
-            scroll_handle.scroll_to_active_item();
-        }
-
         self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -2159,7 +2155,7 @@ impl Element for Div {
                             }
                         }
                     });
-                    crate::fast::layers::paint::end_children(window, cx, fast_layer);
+                    crate::fast::layers::paint::end_children(window, cx, global_id, fast_layer);
 
                     if let Some(listener) = self.prepaint_listener.as_ref() {
                         crate::fast::layers::invalidate::note_uncarried(window);
@@ -2571,14 +2567,22 @@ impl Interactivity {
 
         if let Some(scroll_offset) = self.scroll_offset.as_ref() {
             let mut scroll_to_bottom = false;
-            let mut tracked_scroll_handle = self
+            if let Some(scroll_handle) = self.tracked_scroll_handle.as_ref() {
+                {
+                    let mut scroll_handle_state = scroll_handle.0.borrow_mut();
+                    scroll_handle_state.overflow = style.overflow;
+                    // Scrolling to an item needs this frame's bounds and overflow.
+                    // What the handle remembers is from the last frame, and is
+                    // empty the first time the element is drawn.
+                    scroll_handle_state.bounds = bounds;
+                    scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
+                }
+                scroll_handle.scroll_to_active_item();
+            }
+            let tracked_scroll_handle = self
                 .tracked_scroll_handle
                 .as_ref()
                 .map(|handle| handle.0.borrow_mut());
-            if let Some(scroll_handle_state) = tracked_scroll_handle.as_deref_mut() {
-                scroll_handle_state.overflow = style.overflow;
-                scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
-            }
 
             let rem_size = window.rem_size();
             // Taffy lays the box out with the padding snapped to the device pixel
@@ -2990,6 +2994,7 @@ impl Interactivity {
                     .and_then(|state| state.hover_state.as_ref())
                     .cloned()
             });
+            crate::fast::pointer::note_painted_hover(&hover_state, false, &hitbox.id, window);
             let current_view = window.current_view();
             let subtrees = crate::fast::retained::enclosing_retained_subtrees(window);
 
@@ -3014,6 +3019,12 @@ impl Interactivity {
                     .as_ref()
                     .and_then(|element| element.hover_state.as_ref())
                     .cloned();
+                crate::fast::pointer::note_painted_hover(
+                    &hover_state,
+                    true,
+                    &group_hitbox_id,
+                    window,
+                );
                 let current_view = window.current_view();
                 let subtrees = crate::fast::retained::enclosing_retained_subtrees(window);
 
@@ -3851,7 +3862,8 @@ pub(crate) fn clear_active_tooltip_if_not_hoverable(
 ) {
     let should_clear = match active_tooltip.borrow().as_ref() {
         None => false,
-        Some(ActiveTooltip::WaitingForShow { .. }) => false,
+        // fast: a press cancels a pending show, or it lands over the menu the press opened.
+        Some(ActiveTooltip::WaitingForShow { .. }) => true,
         Some(ActiveTooltip::Visible { is_hoverable, .. }) => !is_hoverable,
         Some(ActiveTooltip::WaitingForHide { .. }) => false,
     };
@@ -5849,6 +5861,48 @@ mod tests {
             .unwrap();
 
         assert_eq!(scroll_handle.max_offset().y, px(0.));
+    }
+
+    #[gpui::test]
+    fn test_scrolls_to_an_item_requested_before_the_first_frame(cx: &mut TestAppContext) {
+        struct Strip {
+            scroll_handle: ScrollHandle,
+        }
+
+        impl Render for Strip {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(
+                    div()
+                        .id("strip")
+                        .flex()
+                        .h(px(20.))
+                        .w(px(100.))
+                        .overflow_x_scroll()
+                        .track_scroll(&self.scroll_handle)
+                        .children((0..5).map(|_| div().flex_none().w(px(40.)).h_full())),
+                )
+            }
+        }
+
+        // The handle has never been drawn, so it knows neither its element's
+        // bounds nor that the element scrolls.
+        let scroll_handle = ScrollHandle::new();
+        scroll_handle.scroll_to_item(4);
+        let window: AnyWindowHandle = cx
+            .add_window({
+                let scroll_handle = scroll_handle.clone();
+                move |_, _| Strip { scroll_handle }
+            })
+            .into();
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+
+        // Five 40px items in a 100px strip: the last one ends at 200px.
+        assert_eq!(scroll_handle.offset().x, px(-100.));
     }
 
     struct ContentSizedGrid;

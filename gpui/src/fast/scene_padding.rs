@@ -11,8 +11,9 @@
 mod tests {
     use crate::{
         AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges,
-        Hsla, LinearColorStop, MonochromeSprite, Point, PolychromeSprite, Quad, ScaledPixels,
-        Shadow, Size, SubpixelSprite, TransformationMatrix, Underline,
+        Hsla, LinearColorStop, MonochromeSprite, PathCurve, PathPaint, PathTile, Point,
+        PolychromeSprite, Quad, ScaledPixels, Shadow, Size, SubpixelSprite, TransformationMatrix,
+        Underline,
     };
 
     /// `size_of::<$ty>()` equals the sum of the sizes of the fields listed,
@@ -80,8 +81,8 @@ mod tests {
             corner_radii,
             content_mask,
             color,
-            element_bounds,
-            element_corner_radii,
+            shape_bounds,
+            shape_corner_radii,
             inset,
             pad
         });
@@ -106,7 +107,7 @@ mod tests {
         });
         no_padding!(MonochromeSprite {
             order,
-            pad,
+            animation,
             tile,
             bounds,
             content_mask,
@@ -131,6 +132,33 @@ mod tests {
             bounds,
             content_mask,
             corner_radii
+        });
+        // A path is hashed by the records it is drawn from.
+        no_padding!(PathPaint {
+            bounds,
+            content_mask,
+            color,
+            even_odd,
+            pad
+        });
+        no_padding!(PathCurve {
+            p0,
+            p1,
+            a,
+            b,
+            sign,
+            pad
+        });
+        no_padding!(PathTile {
+            paint,
+            curve_start,
+            curve_count,
+            backdrop,
+            top_left,
+            bottom_right,
+            reference,
+            curves_top_left,
+            curves_bottom_right
         });
     }
 }

@@ -16,6 +16,8 @@
 //! root one by one, in `gpui.rs`.
 
 pub(crate) mod a11y;
+pub(crate) mod app_borrow;
+pub(crate) mod clock;
 pub(crate) mod composition;
 pub(crate) mod dependencies;
 pub(crate) mod dispatch;
@@ -35,6 +37,7 @@ mod line_break;
 pub(crate) mod list_measure;
 pub(crate) mod misc;
 pub(crate) mod number_shaping;
+pub(crate) mod observers;
 pub(crate) mod path_cache;
 pub(crate) mod pointer;
 pub(crate) mod retained;

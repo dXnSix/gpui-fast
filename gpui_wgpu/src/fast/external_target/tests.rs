@@ -486,9 +486,11 @@ fn released_targets_are_freed_and_the_next_frame_is_whole() -> anyhow::Result<()
         harness
             .renderer
             .core
-            .resources
-            .path_intermediate_view
-            .is_some()
+            .fast_frame
+            .depth
+            .view(64, 48)
+            .is_some(),
+        "the frame keeps a depth attachment"
     );
 
     harness.renderer.release_targets();
@@ -504,11 +506,12 @@ fn released_targets_are_freed_and_the_next_frame_is_whole() -> anyhow::Result<()
         harness
             .renderer
             .core
-            .resources
-            .path_intermediate_view
-            .is_none()
+            .fast_frame
+            .depth
+            .view(64, 48)
+            .is_none(),
+        "the depth attachment is freed"
     );
-    assert!(harness.renderer.core.resources.path_msaa_view.is_none());
 
     harness.mark();
     let damage = harness.draw(&scene, true, 1);

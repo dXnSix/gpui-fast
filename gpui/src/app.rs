@@ -26,7 +26,7 @@ pub use bench_context::{
     BenchAppContext, BenchMeasurement, BenchReport, BenchWindowContext, CountingAllocator,
     MetricReport, bench_platform,
 };
-use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque};
+use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, VecDeque};
 pub use context::*;
 pub use entity_map::*;
 use gpui_util::{ResultExt, debug_panic};
@@ -84,7 +84,7 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 /// Strongly consider removing after stabilization.
 #[doc(hidden)]
 pub struct AppCell {
-    app: RefCell<App>,
+    pub(crate) app: RefCell<App>,
     borrow_origin: Cell<Option<(&'static std::panic::Location<'static>, &'static str)>>,
 }
 
@@ -317,6 +317,7 @@ impl Application {
         let this = self.0.clone();
         let platform = self.0.borrow().platform.clone();
         platform.run(Box::new(move || {
+            crate::fast::app_borrow::track_app(&this);
             let cx = &mut *this.borrow_mut();
             // Some platforms only connect to their display server in `run`.
             cx.displays_changed();
@@ -345,6 +346,7 @@ impl Application {
         let this = self.0.clone();
         let platform = self.0.borrow().platform.clone();
         platform.run(Box::new(move || {
+            crate::fast::app_borrow::track_app(&this);
             let cx = &mut *this.borrow_mut();
             // Some platforms only connect to their display server in `run`.
             cx.displays_changed();
@@ -908,7 +910,7 @@ pub struct App {
         TypeIdHashMap<Vec<Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Self)>>>,
     pending_effects: VecDeque<Effect>,
 
-    pub(crate) observers: SubscriberSet<EntityId, Handler>,
+    pub(crate) observers: SubscriberSet<EntityId, crate::fast::observers::Observer>,
     pub(crate) event_listeners: SubscriberSet<EntityId, (TypeId, Listener)>,
     pub(crate) keystroke_observers: SingleSubscriberSet<KeystrokeObserver>,
     pub(crate) keystroke_interceptors: SingleSubscriberSet<KeystrokeObserver>,
@@ -924,7 +926,7 @@ pub struct App {
     app_lifecycle_observers: SingleSubscriberSet<AppLifecycleHandler>,
     memory_warning_observers: SingleSubscriberSet<Handler>,
     pub(crate) release_listeners: SubscriberSet<EntityId, ReleaseListener>,
-    pub(crate) global_observers: SubscriberSet<TypeId, Handler>,
+    pub(crate) global_observers: SubscriberSet<TypeId, crate::fast::observers::Observer>,
     pub(crate) quit_observers: SingleSubscriberSet<QuitHandler>,
     pub(crate) restart_observers: SingleSubscriberSet<Handler>,
     pub(crate) window_closed_observers: SingleSubscriberSet<WindowClosedHandler>,
@@ -953,8 +955,8 @@ pub struct App {
     http_client: Arc<dyn HttpClient>,
 
     // below is plain data, the drop order is insignificant here
-    pub(crate) pending_notifications: FxHashSet<EntityId>,
-    pub(crate) pending_global_notifications: TypeIdHashSet,
+    pub(crate) pending_notifications: crate::fast::observers::EntityNotices,
+    pub(crate) pending_global_notifications: crate::fast::observers::GlobalNotices,
     pub(crate) dependencies: crate::fast::dependencies::AppDependencies,
     pub(crate) restart_path: Option<PathBuf>,
     pub(crate) restart_arguments: Vec<OsString>,
@@ -1001,7 +1003,6 @@ pub(crate) struct WindowUpdateEntry {
 }
 
 impl App {
-    #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,
         asset_source: Arc<dyn AssetSource>,
@@ -1060,8 +1061,8 @@ impl App {
                 keyboard_mapper,
                 global_action_listeners: Default::default(),
                 pending_effects: VecDeque::new(),
-                pending_notifications: FxHashSet::default(),
-                pending_global_notifications: Default::default(),
+                pending_notifications: crate::fast::observers::EntityNotices::default(),
+                pending_global_notifications: crate::fast::observers::GlobalNotices::default(),
                 dependencies: crate::fast::dependencies::AppDependencies::default(),
                 observers: SubscriberSet::new(),
                 tracked_entities: FxHashMap::default(),
@@ -1508,8 +1509,7 @@ impl App {
     }
 
     pub(crate) fn new_observer(&mut self, key: EntityId, value: Handler) -> Subscription {
-        let (subscription, activate) = self.observers.insert_pending(key, value);
-        self.defer(move |_| activate());
+        let subscription = crate::fast::observers::observe_entity(self, key, value);
         subscription
     }
 
@@ -2091,8 +2091,11 @@ impl App {
     ///
     /// Best-effort: some platforms cannot retract a notification once shown,
     /// in which case it ages out of the notification center on its own.
-    pub fn dismiss_system_notification(&self, tag: &str) {
-        self.platform.dismiss_system_notification(tag);
+    /// The task completes after the platform calls return, not after any
+    /// asynchronous work inside the operating system. Dropping it does not
+    /// cancel dismissal.
+    pub fn dismiss_system_notification(&self, tag: &str) -> Task<()> {
+        self.platform.dismiss_system_notification(tag)
     }
 
     /// Registers the handler invoked when the user activates a system
@@ -2228,13 +2231,13 @@ impl App {
     pub(crate) fn push_effect(&mut self, effect: Effect) {
         match &effect {
             Effect::Notify { emitter } => {
-                if !self.pending_notifications.insert(*emitter) {
+                if !crate::fast::observers::note_entity_change(self, *emitter) {
                     return;
                 }
             }
             Effect::NotifyGlobalObservers { global_type } => {
                 crate::fast::dependencies::global_changed(self, *global_type);
-                if !self.pending_global_notifications.insert(*global_type) {
+                if !crate::fast::observers::note_global_change(self, *global_type) {
                     return;
                 }
             }
@@ -2373,11 +2376,11 @@ impl App {
     }
 
     fn apply_notify_effect(&mut self, emitter: EntityId) {
-        self.pending_notifications.remove(&emitter);
+        let fast_told = crate::fast::observers::take_entity_notice(self, emitter);
 
-        self.observers
-            .clone()
-            .retain(&emitter, |handler| handler(self));
+        self.observers.clone().retain(&emitter, |observer| {
+            crate::fast::observers::tell(observer, fast_told, self)
+        });
     }
 
     fn apply_emit_effect(&mut self, emitter: EntityId, event_type: TypeId, event: &dyn Any) {
@@ -2402,10 +2405,10 @@ impl App {
     }
 
     fn apply_notify_global_observers_effect(&mut self, type_id: TypeId) {
-        self.pending_global_notifications.remove(&type_id);
-        self.global_observers
-            .clone()
-            .retain(&type_id, |observer| observer(self));
+        let fast_told = crate::fast::observers::take_global_notice(self, type_id);
+        self.global_observers.clone().retain(&type_id, |observer| {
+            crate::fast::observers::tell(observer, fast_told, self)
+        });
     }
 
     fn apply_defer_effect(&mut self, callback: Box<dyn FnOnce(&mut Self) + 'static>) {
@@ -2721,14 +2724,14 @@ impl App {
         &mut self,
         mut f: impl FnMut(&mut Self) + 'static,
     ) -> Subscription {
-        let (subscription, activate) = self.global_observers.insert_pending(
+        let subscription = crate::fast::observers::observe_global(
+            self,
             TypeId::of::<G>(),
             Box::new(move |cx| {
                 f(cx);
                 true
             }),
         );
-        self.defer(move |_| activate());
         subscription
     }
 
@@ -3304,7 +3307,7 @@ impl App {
             .collect();
 
         if live_invalidators.is_empty() {
-            if self.pending_notifications.insert(entity_id) {
+            if crate::fast::observers::note_entity_change(self, entity_id) {
                 self.pending_effects
                     .push_back(Effect::Notify { emitter: entity_id });
             }

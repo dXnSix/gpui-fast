@@ -4,9 +4,9 @@
 use crate::AppContext as _;
 use crate::{
     AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, ContentMask, DevicePixels, Hsla,
-    LayerFrame, LayerKey, MonochromeSprite, Path, Pixels, Point, PolychromeSprite, Quad,
-    ScaledPixels, Scene, Shadow, SubpixelSprite, TileCoord, TileId, TransformationMatrix,
-    Underline, decode_layer_tile, fast::layers::scene::translate_primitive, layer_tile_id,
+    LayerFrame, LayerKey, MonochromeSprite, Pixels, Point, PolychromeSprite, Quad, ScaledPixels,
+    Scene, Shadow, SubpixelSprite, TileCoord, TileId, TransformationMatrix, Underline,
+    decode_layer_tile, fast::layers::scene::translate_primitive, layer_tile_id,
     layer_tile_texture_id, point, px, scene::Primitive, size,
 };
 
@@ -147,7 +147,8 @@ fn a_tile_scene_keeps_layers_sharing_one_draw_order() {
     content.insert_primitive(quad(sp(10., 10., 10., 10.)));
     content.insert_primitive(quad(sp(600., 10., 10., 10.)));
     content.pop_layer();
-    content.insert_primitive(quad(sp(20., 20., 10., 10.)));
+    // Over the layer's first quad: upstream orders a layer by what it painted.
+    content.insert_primitive(quad(sp(15., 15., 10., 10.)));
     content.finish();
     let layer = layer(content);
 
@@ -208,9 +209,9 @@ fn content_in_parts_draws_each_tile_as_one_scene_does() {
                         corner_radii: Default::default(),
                         content_mask: wide_mask(),
                         color: Hsla::black(),
-                        element_bounds: sp(100., y + 150., 300., 40.),
-                        element_corner_radii: Default::default(),
-                        inset: 0,
+                        shape_bounds: sp(100., y + 150., 300., 40.),
+                        shape_corner_radii: Default::default(),
+                        inset: false.into(),
                         pad: 0,
                     }
                     .into(),
@@ -297,16 +298,16 @@ fn translation_moves_every_position_a_primitive_carries() {
         corner_radii: Default::default(),
         content_mask: mask,
         color: Hsla::red(),
-        element_bounds: sp(5., 6., 7., 8.),
-        element_corner_radii: Default::default(),
-        inset: 0,
+        shape_bounds: sp(5., 6., 7., 8.),
+        shape_corner_radii: Default::default(),
+        inset: false.into(),
         pad: 0,
     };
     let Primitive::Shadow(moved) = translate(shadow.into()) else {
         unreachable!()
     };
     assert_eq!(moved.bounds, sp(8., -1., 3., 4.));
-    assert_eq!(moved.element_bounds, sp(12., 3., 7., 8.));
+    assert_eq!(moved.shape_bounds, sp(12., 3., 7., 8.));
     assert_eq!(moved.content_mask.bounds, moved_mask);
     assert_eq!(moved.blur_radius, ScaledPixels(2.));
 
@@ -322,48 +323,35 @@ fn translation_moves_every_position_a_primitive_carries() {
     assert_eq!(moved.bounds, sp(8., -1., 3., 4.));
     assert_eq!(moved.content_mask.bounds, moved_mask);
 
-    let mut path = Path::new(point(px(10.), px(20.)));
-    path.push_triangle(
-        (
-            point(px(10.), px(20.)),
-            point(px(30.), px(20.)),
-            point(px(10.), px(40.)),
-        ),
-        (point(0., 1.), point(0., 1.), point(0., 1.)),
+    let mut path = crate::PathBuilder::fill();
+    path.move_to(point(px(10.), px(20.)));
+    path.line_to(point(px(30.), px(20.)));
+    path.line_to(point(px(10.), px(40.)));
+    path.close();
+    let mut path = crate::PaintedPath::new(
+        path.build().expect("triangle"),
+        1.,
+        ContentMask {
+            bounds: mask.bounds.map(|c| px(c.0)),
+        },
+        Hsla::red().into(),
     );
-    let mut path = path.scale(1.);
-    path.content_mask = mask;
-    for vertex in &mut path.vertices {
-        vertex.content_mask = mask;
-    }
+    path.clip_content_mask(&mask.bounds);
     let bounds = path.bounds;
+    let tiles = path.tiles.clone();
     let Primitive::Path(moved) = translate(path.into()) else {
         unreachable!()
     };
     assert_eq!(moved.bounds.origin, bounds.origin + delta);
     assert_eq!(moved.bounds.size, bounds.size);
-    assert_eq!(moved.content_mask.bounds, moved_mask);
-    let positions: Vec<_> = moved.vertices.iter().map(|v| v.xy_position).collect();
+    assert_eq!(moved.content_mask().bounds, moved_mask);
+    let expected = tiles.translated(point(delta.x.0, delta.y.0));
     assert_eq!(
-        positions,
-        vec![
-            point(ScaledPixels(17.), ScaledPixels(17.)),
-            point(ScaledPixels(37.), ScaledPixels(17.)),
-            point(ScaledPixels(17.), ScaledPixels(37.)),
-        ]
+        moved.tiles.tiles(),
+        expected.tiles(),
+        "tiles moved with the path"
     );
-    assert!(
-        moved
-            .vertices
-            .iter()
-            .all(|v| v.content_mask.bounds == moved_mask)
-    );
-    assert!(
-        moved
-            .vertices
-            .iter()
-            .all(|v| v.st_position == point(0., 1.))
-    );
+    assert_eq!(moved.tiles.curves(), expected.curves());
 
     let underline = Underline {
         order: 0,
@@ -393,7 +381,7 @@ fn translation_moves_every_position_a_primitive_carries() {
     };
     let mono = MonochromeSprite {
         order: 0,
-        pad: 0,
+        animation: Default::default(),
         bounds: sp(1., 2., 3., 4.),
         content_mask: mask,
         color: Hsla::red(),
@@ -1571,10 +1559,11 @@ mod paint {
                             |_, _, _| {},
                             |bounds, _, window, _| {
                                 let origin = bounds.origin;
-                                let mut path = crate::Path::new(origin);
+                                let mut path = crate::PathBuilder::fill();
+                                path.move_to(origin);
                                 path.line_to(origin + crate::point(crate::px(30.), crate::px(0.)));
                                 path.line_to(origin + crate::point(crate::px(0.), crate::px(30.)));
-                                window.paint_path(path, crate::black());
+                                window.paint_path(path.build().expect("path"), crate::black());
                             },
                         )
                         .h(crate::px(40.))
@@ -1664,9 +1653,9 @@ mod footprints {
             corner_radii: Default::default(),
             content_mask: wide_mask(),
             color,
-            element_bounds: sp(400., 100., 100., 100.),
-            element_corner_radii: Default::default(),
-            inset: 0,
+            shape_bounds: sp(400., 100., 100., 100.),
+            shape_corner_radii: Default::default(),
+            inset: false.into(),
             pad: 0,
         }
     }
@@ -1676,7 +1665,7 @@ mod footprints {
         // around its centre (475, 135): its corners reach x = 524.5.
         MonochromeSprite {
             order: 0,
-            pad: 0,
+            animation: Default::default(),
             bounds: sp(440., 100., 70., 70.),
             content_mask: wide_mask(),
             color,
@@ -2694,16 +2683,16 @@ mod decisions {
 /// Tests of which scroll containers get a layer and for how long (M4).
 mod policies {
     use super::decisions::{
-        LayerPage, decision, frame_after, page, promote, scroll, scroll_and, scroller_id,
+        LayerPage, decision, frame_after, page, promote, scroll, scroll_and, scroller_id, viewport,
     };
     use super::invalidation::{draw, with_window};
     use crate::fast::layers::policy::Decision;
     use crate::{
-        AnyElement, AnyWindowHandle, GlobalElementId, InteractiveElement as _, IntoElement,
-        ParentElement as _, Path, Styled as _, TestAppContext, WindowHandle, anchored, canvas,
-        deferred, div, point, px, size,
+        AnyElement, AnyWindowHandle, DevicePixels, GlobalElementId, InteractiveElement as _,
+        IntoElement, ParentElement as _, Styled as _, TestAppContext, WindowHandle, anchored,
+        canvas, deferred, div, point, px, size,
     };
-    use std::{ops::Range, rc::Rc};
+    use std::{cell::RefCell, ops::Range, rc::Rc};
 
     /// Puts `extra` at the top of the page's scroll container.
     fn with_extra(
@@ -2804,6 +2793,106 @@ mod policies {
         assert_eq!(layers_demoted(cx, window), 0);
         assert!(!has_record(cx, window));
         assert_eq!(scroll(cx, window, -20.), Some(Decision::Bypass));
+    }
+
+    #[crate::test]
+    fn a_native_surface_placed_inside_keeps_it_off_its_layer(cx: &mut TestAppContext) {
+        if !crate::fast::layers::COMPILED {
+            return;
+        }
+        let handle = page(cx, false);
+        let window = handle.into();
+        // A web view: placed where its element is prepainted, which a
+        // composited frame skips, leaving it where the content was.
+        let surface = with_window(cx, window, |window, _| {
+            crate::fast::composition::tests::native_surface(window)
+        });
+        let host = surface.clone();
+        with_extra(cx, handle, move || {
+            crate::fast::composition::tests::native_host(host.clone()).into_any_element()
+        });
+        // The layer is never tried while the content holds the surface: the
+        // frame trying it would prepaint the content under the layer's wider
+        // mask, which a web view takes for its clip (gpui-kit#4057).
+        for step in 0..40 {
+            let delta = if step % 20 < 10 { -20. } else { 20. };
+            let decision = scroll(cx, window, delta);
+            let offset = handle
+                .update(cx, |page, _, _| page.handle.offset())
+                .unwrap();
+            let scale = with_window(cx, window, |window, _| window.scale_factor());
+            assert_eq!(
+                surface.bounds().origin.y,
+                DevicePixels((offset.y.0 * scale).round() as i32),
+                "step {step}: the surface moves with the content"
+            );
+            assert_eq!(decision, Some(Decision::Bypass), "step {step}");
+            assert!(!has_record(cx, window), "step {step}");
+        }
+        // Once the web view leaves the content, the layer is painted again
+        // when the wait for it is over, and composited.
+        with_extra(cx, handle, || div().into_any_element());
+        let composited = (0..12).any(|_| scroll(cx, window, -20.) == Some(Decision::Composite));
+        assert!(composited, "the layer is composited again");
+    }
+
+    /// A web view appearing in content held in a layer is prepainted once
+    /// into the layer, under the mask that also covers the overscan, before
+    /// the container is kept off its layer. It places its native view within
+    /// the viewport all the same, clipped to `Window::surface_clip`.
+    #[crate::test]
+    fn a_native_surface_appearing_in_a_layer_is_clipped_to_the_viewport(cx: &mut TestAppContext) {
+        if !crate::fast::layers::COMPILED {
+            return;
+        }
+        let handle = page(cx, false);
+        let window = handle.into();
+        // Scrolled 40 px down: the top of the web view added below shows.
+        promote(cx, window);
+        let surface = with_window(cx, window, |window, _| {
+            crate::fast::composition::tests::native_surface(window)
+        });
+        // Each mask the web view is prepainted in, and where it then places
+        // its native view: its bounds within its clip, as gpui-webview does.
+        let placements = Rc::new(RefCell::new(Vec::new()));
+        let (host, noted) = (surface.clone(), placements.clone());
+        with_extra(cx, handle, move || {
+            let (host, noted) = (host.clone(), noted.clone());
+            canvas(
+                move |bounds, window, _| {
+                    let shown = bounds.intersect(&window.surface_clip());
+                    host.set_bounds(shown.to_device_pixels(window.scale_factor()))
+                        .unwrap();
+                    noted
+                        .borrow_mut()
+                        .push((window.content_mask().bounds, host.bounds()));
+                },
+                |_, _, _, _| {},
+            )
+            .size(px(50.))
+            .into_any_element()
+        });
+        for _ in 0..4 {
+            scroll(cx, window, 5.);
+        }
+        let scale = with_window(cx, window, |window, _| window.scale_factor());
+        let shown = viewport().to_device_pixels(scale);
+        let placements = placements.borrow();
+        assert!(
+            placements
+                .iter()
+                .any(|(mask, _)| mask.intersect(&viewport()) != *mask),
+            "the web view was prepainted into the layer"
+        );
+        assert!(
+            placements.iter().all(|(_, placed)| !placed.is_empty()),
+            "the web view shows"
+        );
+        let past = placements
+            .iter()
+            .map(|(_, placed)| placed)
+            .find(|placed| placed.intersect(&shown) != **placed);
+        assert_eq!(past, None, "the web view is placed within the viewport");
     }
 
     #[crate::test]
@@ -3041,11 +3130,12 @@ mod policies {
                     // Where it shows once scrolled by the 40 px promotion
                     // takes; out of view it is culled.
                     let origin = bounds.origin + point(px(0.), px(60.));
-                    let mut path = Path::new(origin);
+                    let mut path = crate::PathBuilder::fill();
+                    path.move_to(origin);
                     path.line_to(origin + point(px(10.), px(0.)));
                     path.line_to(origin + point(px(10.), px(10.)));
                     path.line_to(origin);
-                    window.paint_path(path, crate::red());
+                    window.paint_path(path.build().expect("path"), crate::red());
                     if cover {
                         window.paint_quad(crate::fill(
                             crate::Bounds::new(origin, size(px(5.), px(5.))),
@@ -4147,7 +4237,7 @@ mod integration {
 
     fn path_over_tiles_matches_drawing_without_layers(cx: &mut TestAppContext, scale_factor: f32) {
         use super::decisions::{LayerPage, new_page};
-        use crate::{Path, canvas, point, size};
+        use crate::{canvas, point, size};
         let composited = matches_drawing_without_layers(cx, scale_factor, |cx| LayerPage {
             extra: Some(std::rc::Rc::new(|| {
                 canvas(
@@ -4157,14 +4247,15 @@ mod integration {
                         // circle draws its track and its arc.
                         for (inset, color) in [(0., crate::red()), (3., crate::green())] {
                             let origin = bounds.origin + point(px(20. + inset), px(70.));
-                            let mut path = Path::new(origin);
+                            let mut path = crate::PathBuilder::fill();
+                            path.move_to(origin);
                             path.line_to(origin + point(px(12.), px(0.)));
                             path.curve_to(
                                 origin + point(px(0.), px(12.)),
                                 origin + point(px(14.), px(14.)),
                             );
                             path.line_to(origin);
-                            window.paint_path(path, color);
+                            window.paint_path(path.build().expect("path"), color);
                         }
                         window.paint_quad(crate::fill(
                             crate::Bounds::new(bounds.origin, size(px(10.), px(10.))),

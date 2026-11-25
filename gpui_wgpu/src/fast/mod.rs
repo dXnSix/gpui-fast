@@ -25,3 +25,6 @@ pub(crate) mod layers;
 pub(crate) mod pass_state;
 pub(crate) mod pipeline_cache;
 pub(crate) mod rounded_clip;
+pub(crate) mod synthetic_italic;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod wgpu_context;

@@ -20,7 +20,6 @@ fn texture_renderer() -> crate::wgpu_renderer::WgpuHeadlessRenderer {
         &layouts,
         core.target_format,
         wgpu::CompositeAlphaMode::Opaque,
-        core.rendering_params.path_sample_count,
         false,
         true,
     );

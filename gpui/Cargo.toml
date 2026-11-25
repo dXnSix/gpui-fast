@@ -1,7 +1,7 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast"
-version = "0.1.16"
+version = "0.1.19"
 edition = "2024"
 authors = ["Nathan Sobo <nathan@zed.dev>", "Longbridge"]
 description = "gpui: GPUI with gpui-fast rendering and layout optimizations"
@@ -13,7 +13,7 @@ readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
 autobenches = false
-documentation = "https://docs.rs/gpui-fast/0.1.16/gpui/"
+documentation = "https://docs.rs/gpui-fast/0.1.19/gpui/"
 autoexamples = false
 autotests = false
 include = ["/src/**", "/resources/**", "/build.rs", "/Cargo.toml", "/README.md", "/LICENSE", "/NOTICE"]
@@ -45,8 +45,9 @@ parking = "2.0.0"
 ttf-parser = "0.25"
 seahash = "4.1"
 waker-fn = "1.2.0"
-lyon = "1.0"
+lyon_path = "1.0.19"
 pin-project = "1.1.10"
+tiny-skia-path = "0.11"
 
 [dependencies.accesskit]
 version = "0.24.0"
@@ -65,13 +66,13 @@ version = "0.3"
 version = "2.6.0"
 
 [dependencies.collections]
-version = "=0.3.12"
+version = "=0.3.14"
 package = "gpui-pre-collections"
 
 [dependencies.bench_metrics]
 optional = true
 package = "gpui-pre-bench-metrics"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [dependencies.criterion]
 version = "0.8.2"
@@ -94,16 +95,16 @@ optional = true
 
 [dependencies.gpui_macros]
 package = "gpui-fast-macros"
-version = "^0.1.16"
+version = "^0.1.19"
 path = "../gpui_macros"
 
 [dependencies.gpui_shared_string]
 package = "gpui-pre-shared-string"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [dependencies.http_client]
 package = "gpui-pre-http-client"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [dependencies.icu_segmenter]
 version = "2.3.0"
@@ -120,6 +121,9 @@ version = "0.3.19"
 
 [dependencies.itertools]
 version = "0.14.0"
+
+[dependencies.jiff]
+version = "1.0"
 
 [dependencies.log]
 version = "0.4"
@@ -140,11 +144,6 @@ version = "1.12.0"
 features = ["attr-macro"]
 optional = true
 
-[dependencies.chrono]
-version = "0.4"
-default-features = true
-features = ["std", "serde"]
-
 [dependencies.profiling]
 version = "1"
 
@@ -163,11 +162,12 @@ features = ["std", "perf"]
 
 [dependencies.refineable]
 package = "gpui-pre-refineable"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [dependencies.scheduler]
-package = "gpui-pre-scheduler"
-version = "=0.3.12"
+package = "gpui-fast-scheduler"
+version = "^0.1.19"
+path = "../scheduler"
 
 [dependencies.resvg]
 version = "0.46.0"
@@ -208,7 +208,7 @@ features = ["derive"]
 
 [dependencies.sum_tree]
 package = "gpui-pre-sum-tree"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [dependencies.taffy]
 version = "0.15.0"
@@ -223,7 +223,7 @@ version = "1.10"
 
 [dependencies.gpui_util]
 package = "gpui-pre-util"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [dependencies.hdrhistogram]
 version = "7"
@@ -288,6 +288,10 @@ features = ["wasm_js"]
 [target."cfg(target_family = \"wasm\")".dependencies.uuid]
 version = "1.1"
 features = ["serde", "js"]
+
+[target."cfg(target_family = \"wasm\")".dependencies.jiff]
+version = "1.0"
+features = ["js"]
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-core-foundation]
 version = "0.3.2"

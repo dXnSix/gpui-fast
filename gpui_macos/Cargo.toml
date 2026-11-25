@@ -1,14 +1,14 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast-macos"
-version = "0.1.16"
+version = "0.1.19"
 edition = "2024"
 publish = ["crates-io"]
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
-documentation = "https://docs.rs/gpui-fast-macos/0.1.16/gpui_macos/"
+documentation = "https://docs.rs/gpui-fast-macos/0.1.19/gpui_macos/"
 description = "gpui_macos: GPUI with gpui-fast rendering and layout optimizations"
 autoexamples = false
 autobenches = false
@@ -32,7 +32,7 @@ screen-capture = ["gpui/screen-capture", "dep:objc2-core-media", "dep:objc2-scre
 [dependencies.gpui]
 default-features = false
 package = "gpui-fast"
-version = "^0.1.16"
+version = "^0.1.19"
 path = "../gpui"
 
 [target."cfg(target_os = \"macos\")".dependencies.accesskit]
@@ -49,7 +49,7 @@ version = "1.0.86"
 version = "0.6"
 
 [target."cfg(target_os = \"macos\")".dependencies.collections]
-version = "=0.3.12"
+version = "=0.3.14"
 package = "gpui-pre-collections"
 
 [target."cfg(target_os = \"macos\")".dependencies.core-foundation]
@@ -77,12 +77,12 @@ version = "0.3.34"
 
 [target."cfg(target_os = \"macos\")".dependencies.gpui_apple]
 package = "gpui-fast-apple"
-version = "^0.1.16"
+version = "^0.1.19"
 path = "../gpui_apple"
 
 [target."cfg(target_os = \"macos\")".dependencies.gpui_util]
 package = "gpui-pre-util"
-version = "=0.3.12"
+version = "=0.3.14"
 
 [target."cfg(target_os = \"macos\")".dependencies.image]
 version = "0.25.1"
@@ -154,8 +154,9 @@ version = "0.12.1"
 version = "0.6"
 
 [target."cfg(target_os = \"macos\")".dependencies.scheduler]
-package = "gpui-pre-scheduler"
-version = "=0.3.12"
+package = "gpui-fast-scheduler"
+version = "^0.1.19"
+path = "../scheduler"
 
 [target."cfg(target_os = \"macos\")".dependencies.semver]
 version = "1.0"
