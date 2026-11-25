@@ -73,6 +73,8 @@ use std::{
     time::Duration,
 };
 
+mod native_views;
+
 pub(crate) const WINDOW_STATE_IVAR: &CStr = c"windowState";
 
 static RESTORES_WORKSPACE_AT_LAUNCH_DEFAULT: Once = Once::new();
@@ -269,6 +271,7 @@ unsafe fn build_classes() {
                 sel!(characterIndexForPoint:),
                 character_index_for_point as extern "C" fn(_, Sel, NSPoint) -> NSUInteger,
             );
+            native_views::add_view_methods(&mut decl);
             decl.register()
         };
         crate::fast::composition::build_overlay_view_class();
@@ -413,8 +416,9 @@ unsafe fn build_window_class(name: &CStr, superclass: &AnyClass) -> *const AnyCl
     unsafe {
         let mut decl = ClassBuilder::new(name, superclass).unwrap();
         decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
-        crate::fast::composition::register_window_input(&mut decl, superclass);
+        crate::fast::composition::register_window_input(&mut decl);
         decl.add_method(sel!(dealloc), dealloc_window as extern "C" fn(_, Sel));
+        native_views::add_window_methods(&mut decl);
 
         decl.add_method(
             sel!(canBecomeMainWindow),
@@ -646,7 +650,7 @@ unsafe fn apply_simple_fullscreen_plan(
 
 /// What paces a window's frames. The choice depends only on the OS version,
 /// so it is made once per window.
-enum FrameSource {
+pub(crate) enum FrameSource {
     /// macOS 14+: a `CAMetalDisplayLink` that hands out each frame's drawable.
     Metal(Rc<MetalFrames>),
     /// Earlier systems: the shared `CVDisplayLink` registry, joined on first start.
@@ -655,7 +659,7 @@ enum FrameSource {
 
 pub(crate) struct MacWindowState {
     handle: AnyWindowHandle,
-    foreground_executor: ForegroundExecutor,
+    pub(crate) foreground_executor: ForegroundExecutor,
     background_executor: BackgroundExecutor,
     pub(crate) native_window: *mut AnyObject,
     pub(crate) native_view: NonNull<AnyObject>,
@@ -664,7 +668,7 @@ pub(crate) struct MacWindowState {
     background_appearance: WindowBackgroundAppearance,
     cursor_style: CursorStyle,
     cursor_visible: Arc<AtomicBool>,
-    frame_source: FrameSource,
+    pub(crate) frame_source: FrameSource,
     pub(crate) renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     pub(crate) event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
@@ -712,6 +716,7 @@ pub(crate) struct MacWindowState {
     accesskit_adapter: Option<accesskit_macos::SubclassingAdapter>,
     // The parent window if this window is a sheet (Dialog kind)
     sheet_parent: Option<*mut AnyObject>,
+    native_views: native_views::NativeViews,
 }
 
 impl MacWindowState {
@@ -878,7 +883,7 @@ impl MacWindowState {
 
     /// `window_state` is the handle this state lives in; a Metal link holds it
     /// weakly to deliver frames.
-    fn start_display_link(&mut self, window_state: &Rc<Mutex<MacWindowState>>) {
+    pub(crate) fn start_display_link(&mut self, window_state: &Rc<Mutex<MacWindowState>>) {
         self.stop_display_link();
         if !self
             .native_window()
@@ -920,7 +925,7 @@ impl MacWindowState {
         }
     }
 
-    fn stop_display_link(&mut self) {
+    pub(crate) fn stop_display_link(&mut self) {
         match &mut self.frame_source {
             FrameSource::Metal(metal_frames) => {
                 if metal_frames.is_attached() {
@@ -1222,6 +1227,7 @@ impl MacWindow {
                 closed: Arc::new(AtomicBool::new(false)),
                 accesskit_adapter: None,
                 sheet_parent: None,
+                native_views: native_views::NativeViews::default(),
             }));
             let mut window = Self(state, marker, metal_frames);
 
@@ -1756,33 +1762,11 @@ impl PlatformWindow for MacWindow {
     }
 
     fn modifiers(&self) -> Modifiers {
-        unsafe {
-            let modifiers: NSEventModifierFlags = msg_send![class!(NSEvent), modifierFlags];
-
-            let control = modifiers.contains(NSEventModifierFlags::Control);
-            let alt = modifiers.contains(NSEventModifierFlags::Option);
-            let shift = modifiers.contains(NSEventModifierFlags::Shift);
-            let command = modifiers.contains(NSEventModifierFlags::Command);
-            let function = modifiers.contains(NSEventModifierFlags::Function);
-
-            Modifiers {
-                control,
-                alt,
-                shift,
-                platform: command,
-                function,
-            }
-        }
+        current_modifiers()
     }
 
     fn capslock(&self) -> Capslock {
-        unsafe {
-            let modifiers: NSEventModifierFlags = msg_send![class!(NSEvent), modifierFlags];
-
-            Capslock {
-                on: modifiers.contains(NSEventModifierFlags::CapsLock),
-            }
-        }
+        current_capslock()
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
@@ -1961,6 +1945,7 @@ impl PlatformWindow for MacWindow {
                 NSColor::colorWithSRGBRed_green_blue_alpha(0f64, 0f64, 0f64, 0.0001)
             };
             let _: () = msg_send![this.native_window, setBackgroundColor: &*background_color];
+            this.native_views.background = None;
 
             if background_appearance != WindowBackgroundAppearance::Blurred {
                 if let Some(blur_view) = this.blurred_view {
@@ -2208,7 +2193,41 @@ impl PlatformWindow for MacWindow {
 
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
+        let native_view_layout = native_views::plan_layout(&this, scene);
+        native_views::update_background(&mut this, scene);
+        native_views::scene_drawn(&mut this, scene);
         this.renderer.draw(scene);
+        drop(this);
+        native_views::apply_layout(&self.0, native_view_layout);
+    }
+
+    unsafe fn attach_native_view(
+        &self,
+        id: gpui::NativeViewId,
+        view: NonNull<c_void>,
+    ) -> Option<Box<dyn std::any::Any>> {
+        // SAFETY: The caller guarantees `view` is a live `NSView` with no superview, and
+        // platform windows are only used on the main thread.
+        unsafe { native_views::attach(&self.0, id, view) }
+    }
+
+    fn set_focused_native_view(&self, id: Option<gpui::NativeViewId>) {
+        native_views::set_focused(&self.0, id);
+    }
+
+    fn on_hit_test_native_view(
+        &self,
+        callback: Box<dyn FnMut(Point<Pixels>) -> Option<gpui::NativeViewId>>,
+    ) {
+        self.0.lock().native_views.hit_test_callback = Some(callback);
+    }
+
+    fn on_native_view_focused(&self, callback: Box<dyn FnMut(gpui::NativeViewId)>) {
+        self.0.lock().native_views.focused_callback = Some(callback);
+    }
+
+    fn on_key_down_before_native_view(&self, callback: Box<dyn FnMut(KeyDownEvent) -> bool>) {
+        self.0.lock().native_views.key_down_before_callback = Some(callback);
     }
 
     fn draw_composed(&self, scene: gpui::ComposedScene<'_>) {
@@ -2616,6 +2635,36 @@ fn get_scale_factor(native_window: *mut AnyObject) -> f32 {
 }
 
 /// Returns whether `window` is one of GPUI's managed windows.
+fn current_modifiers() -> Modifiers {
+    unsafe {
+        let modifiers: NSEventModifierFlags = msg_send![class!(NSEvent), modifierFlags];
+
+        let control = modifiers.contains(NSEventModifierFlags::Control);
+        let alt = modifiers.contains(NSEventModifierFlags::Option);
+        let shift = modifiers.contains(NSEventModifierFlags::Shift);
+        let command = modifiers.contains(NSEventModifierFlags::Command);
+        let function = modifiers.contains(NSEventModifierFlags::Function);
+
+        Modifiers {
+            control,
+            alt,
+            shift,
+            platform: command,
+            function,
+        }
+    }
+}
+
+fn current_capslock() -> Capslock {
+    unsafe {
+        let modifiers: NSEventModifierFlags = msg_send![class!(NSEvent), modifierFlags];
+
+        Capslock {
+            on: modifiers.contains(NSEventModifierFlags::CapsLock),
+        }
+    }
+}
+
 unsafe fn is_gpui_window(window: *mut AnyObject) -> bool {
     unsafe {
         msg_send![window, isKindOfClass: WINDOW_CLASS]
@@ -2637,14 +2686,39 @@ pub(crate) unsafe fn get_window_state(object: &AnyObject) -> Rc<Mutex<MacWindowS
     }
 }
 
-pub(crate) unsafe fn drop_window_state(object: &AnyObject) {
+/// Returns the window state, or `None` before it is set or after it is dropped.
+///
+/// AppKit can call methods it defines on a window, unlike the delegate methods
+/// GPUI adds, while the window is still being initialized or deallocated.
+unsafe fn window_state_if_set(object: &AnyObject) -> Option<Rc<Mutex<MacWindowState>>> {
     unsafe {
         let raw = *object
             .class()
             .instance_variable(WINDOW_STATE_IVAR)
             .expect("GPUI window state ivar")
             .load::<*mut c_void>(object);
-        Rc::from_raw(raw as *mut Mutex<MacWindowState>);
+        if raw.is_null() {
+            return None;
+        }
+        let state = Rc::from_raw(raw as *mut Mutex<MacWindowState>);
+        let clone = state.clone();
+        mem::forget(state);
+        Some(clone)
+    }
+}
+
+pub(crate) unsafe fn drop_window_state(object: &AnyObject) {
+    unsafe {
+        let ivar = object
+            .class()
+            .instance_variable(WINDOW_STATE_IVAR)
+            .expect("GPUI window state ivar");
+        let raw = *ivar.load::<*mut c_void>(object);
+        // Cleared so that anything the superclass calls while deallocating sees no state.
+        *ivar.load_ptr::<*mut c_void>(object) = ptr::null_mut();
+        if !raw.is_null() {
+            drop(Rc::from_raw(raw as *mut Mutex<MacWindowState>));
+        }
     }
 }
 
@@ -2740,11 +2814,17 @@ extern "C" fn reset_cursor_rects(this: &AnyObject, _: Sel) {
         let _: () = msg_send![super(this, class!(NSView)), resetCursorRects];
 
         let window_state = get_window_state(this);
-        let cursor_style = window_state.lock().cursor_style;
+        let cursor_style = {
+            let lock = window_state.lock();
+            if native_views::native_view_sets_cursor(&lock) {
+                return;
+            }
+            lock.cursor_style
+        };
 
         let cursor = native_cursor(cursor_style);
 
-        let bounds: NSRect = msg_send![this, bounds];
+        let bounds = crate::fast::composition::cursor_rect(&window_state, msg_send![this, bounds]);
         let _: () = msg_send![this, addCursorRect: bounds, cursor: cursor];
     }
 }
@@ -2754,6 +2834,9 @@ extern "C" fn handle_key_equivalent(
     _: Sel,
     native_event: *mut AnyObject,
 ) -> Bool {
+    if native_views::is_routing_key_equivalent(&unsafe { get_window_state(this) }) {
+        return Bool::NO;
+    }
     handle_key_event(this, native_event, true)
 }
 
@@ -3197,9 +3280,9 @@ extern "C" fn window_did_change_occlusion_state(this: &AnyObject, _: Sel, _: *mu
         .contains(NSWindowOcclusionState::Visible)
     {
         lock.move_traffic_light();
-        lock.start_display_link(&window_state);
+        crate::fast::display_link_lifecycle::visibility_changed(&mut lock, &window_state, true);
     } else {
-        lock.stop_display_link();
+        crate::fast::display_link_lifecycle::visibility_changed(&mut lock, &window_state, false);
     }
     drop(lock);
     // The only visibility source: AppKit posts this for covering, minimizing,
@@ -3372,9 +3455,10 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
 
     let a11y_events = {
         let mut lock = window_state.lock();
+        let is_focused = is_active && native_views::gpui_view_is_focused(&lock);
         lock.accesskit_adapter
             .as_mut()
-            .and_then(|adapter| adapter.update_view_focus_state(is_active))
+            .and_then(|adapter| adapter.update_view_focus_state(is_focused))
     };
     if let Some(events) = a11y_events {
         events.raise();
@@ -3532,6 +3616,8 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
         lock.request_frame_callback = Some(callback);
         crate::fast::composition::set_presents_with_transaction(&mut lock, false);
         lock.start_display_link(&window_state);
+        drop(lock);
+        native_views::check_pointer_after_frame(&window_state);
     }
 }
 
@@ -3549,6 +3635,7 @@ extern "C" fn step(view: *mut c_void) {
             (None, FrameRequestSource::NativeCallback),
             |(at, source)| (Some(at), source),
         );
+        crate::fast::composition::present_for_native_views(&mut lock);
         drop(lock);
         callback(RequestFrameOptions {
             signal_at,
@@ -3556,6 +3643,7 @@ extern "C" fn step(view: *mut c_void) {
             ..Default::default()
         });
         window_state.lock().request_frame_callback = Some(callback);
+        native_views::check_pointer_after_frame(&window_state);
     }
 }
 
@@ -3586,6 +3674,8 @@ fn metal_frame(
     // lets the link hand it out again.
     let used_drawable = lock.renderer.set_frame_drawable(None).is_none();
     metal_frames.end_frame(used_drawable);
+    drop(lock);
+    native_views::check_pointer_after_frame(window_state);
 }
 
 extern "C" fn valid_attributes_for_marked_text(_: &AnyObject, _: Sel) -> *mut AnyObject {

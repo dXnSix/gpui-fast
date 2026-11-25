@@ -78,6 +78,26 @@ only hold the hooks that call into it.
    the platform.
    The addition is one accessor returning a clone of the `Rc` it already
    holds, and nothing else about the web platform becomes public.
+   A third exception is `gpui_wgpu::wgpu_context()` (in
+   `gpui_wgpu::fast::wgpu_context`): the same reach for the platforms that draw
+   their windows with wgpu (Linux: Wayland and X11), whose context lives in a
+   slot the platform keeps private. An application that renders on GPUI's
+   device, such as a map engine, draws during `paint` into a
+   `WgpuDynamicTexture`, so its content and GPUI's overlays show in one frame;
+   on a native surface (window composition) it would reach the compositor
+   apart from GPUI's frame.
+   The addition is one public function returning a clone of the context in
+   the slot, read from a thread-local the one hook in `WgpuRenderer::new`
+   (`note_gpu_context`) fills; the slot itself stays private.
+   A fourth exception is `Window::surface_clip` (in `fast::layers::paint`):
+   while a scroll layer's content is painted, the content mask also covers
+   the overscan around the viewport, which only gpui-fast paints. An element
+   placing a native or external GPU surface, such as gpui-webview's, clips it
+   to what shows instead, or the surface shows outside its scroll container
+   for that frame (longbridge/gpui-kit#4057). The addition is one method: the
+   content mask within the viewport of the layer being painted, as hitboxes
+   are clipped (`fast::layers::input::hitbox_mask`), and the content mask
+   outside one. Only elements that call it are clipped.
 6. **New files only inside `fast/`, or in our own crates** such as
    `crates/gpui_perf` (benchmarks, examples and the frame-measuring app) and
    `compat/` (the `gpui-pre-*` stand-ins GPUI Kit applications patch in).
@@ -148,6 +168,17 @@ few places where gpui-fast's differs from upstream's are listed here. Each is
 forced by what `fast/` keeps; anything not listed here is upstream's API
 unchanged, and a new entry needs as good a reason.
 
+- `gpui` exports `app_is_borrowed` (`#[doc(hidden)]`), for `gpui_windows`:
+  synchronous OS calls that pump the message queue while the app is
+  borrowed (WebView2 creation, `Command::spawn`) can dispatch `WM_GPUI_*`
+  messages re-entrantly, and handling them panics on a second
+  `AppCell::borrow_mut`. `gpui_windows` instead queues the ones whose
+  handlers call into the app and handles them, oldest first, once the
+  borrow is released: from its own message loop, before the next
+  `WM_GPUI_*` message, and from a timer on the platform window, which
+  also fires inside OS modal loops. `app_is_borrowed` lives in `fast::app_borrow`, which also records the running app's
+  `AppCell` per thread from `Application::run`/`run_embedded`.
+
 - `ViewElement`'s `Element::RequestLayoutState` and `PrepaintState` are
   `fast::retained::ViewLayoutState` and `ViewPrepaintState`, opaque types, in
   place of `Option<AnyElement>`. `ViewElement` is `#[doc(hidden)]`, and the
@@ -197,7 +228,7 @@ unchanged, and a new entry needs as good a reason.
   (`gpui_wgpu::fast::hole`).
 - Window composition, the API of
   [zed#62379](https://github.com/zed-industries/zed/pull/62379), which
-  upstream has not merged yet: native views drawn between a window's GPUI
+  upstream closed without merging: native views drawn between a window's GPUI
   content and its overlays. `gpui` exports `WindowComposition`,
   `WindowCompositionSurface`, `CompositionSurfaceId`,
   `CompositionSurfaceKind`, `PlatformSurfaceAttachment`,
@@ -211,8 +242,13 @@ unchanged, and a new entry needs as good a reason.
   `with_composition_surface`; `gpui_apple` exports `new_overlay_renderer`
 for `gpui_macos`, `WgpuRenderer` gains `new_sharing_atlas` and
 `replace_surface_sharing_context` for `gpui_linux`, and `Background` gains
-`is_opaque` so `gpui_linux` cuts only opaque content out of native surfaces. It all lives in `fast::composition`, so when
-  upstream merges its version, the sync replaces ours with it. Two things
+`is_opaque` so `gpui_linux` cuts only opaque content out of native surfaces. It all lives in `fast::composition`.
+  Upstream instead merged a different, macOS-only API,
+  [zed#67311](https://github.com/zed-industries/zed/pull/67311) `NativeView`
+  (primitives composited into the scene by the Metal renderer). The two
+  coexist: syncs keep upstream's `NativeView` as it is and keep
+  `fast::composition`, which covers macOS, Windows, X11 and Wayland and which
+  gpui-kit's webview and NSH depend on. Neither replaces the other. Two things
   behave differently from the pull request: a retained view drawn again from
   last frame keeps the surface switches it made, and `with_composition_surface`
   inside a scroll layer paints where the layer does. A window that composes
@@ -272,6 +308,15 @@ No application-specific timeline policy belongs here.
   well as native wgpu. The existing Metal upload backend and its installer
   are unchanged; CPU updates refuse GPU-written metadata. A native Metal
   producer interface is outside this extension.
+
+- `scheduler`'s `Clock::utc_now` and `TestClock::set_utc_now` use
+  `SystemTime` (exported next to `Instant`, both from `web_time`) instead of
+  `chrono::DateTime<Utc>`, which leaves `chrono` (RUSTSEC-2026-0543,
+  unmaintained) out of every GPUI application's dependencies. It lives in
+  `scheduler`'s `fast::clock` and `gpui`'s `fast::clock`. Upstream makes the
+  same change in [zed#67089](https://github.com/zed-industries/zed/pull/67089);
+  the sync that brings it keeps upstream's lines in `clock.rs` and
+  `platform_scheduler.rs` and deletes both `fast/clock.rs` files.
 
 When the check fails, move the change into a `fast/` module and leave a hook
 behind that names it; use `git diff <import_commit> -- <file>` to see what

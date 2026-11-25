@@ -7,6 +7,7 @@
 //! forwarding a call to it. The logic itself is written here, one file per
 //! topic.
 
+pub(crate) mod app_borrow;
 pub(crate) mod backdrop;
 pub(crate) mod class_names;
 pub(crate) mod composition;
@@ -19,7 +20,12 @@ pub(crate) mod font_fallback;
 pub(crate) mod frame;
 pub(crate) mod frame_schedule;
 pub(crate) mod globals;
+pub(crate) mod initial_placement;
 pub(crate) mod layers;
 #[cfg(test)]
 pub(crate) mod native_tests;
+pub(crate) mod occlusion;
+pub(crate) mod opaque_tiles;
+pub(crate) mod partial;
 pub(crate) mod rounded_clip;
+pub(crate) mod synthetic_italic;

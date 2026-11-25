@@ -188,20 +188,34 @@ fn summarize_into(scene: &Scene, frame: u64, items: &mut Vec<Item>) {
                 }
             }
             PrimitiveBatch::Paths(range) => {
+                // A path is drawn from its paint, its curves and its tiles: the
+                // same records hash the same.
+                let (mut paints, mut curves, mut tiles) = (Vec::new(), Vec::new(), Vec::new());
                 for path in &scene.paths[range] {
+                    paints.clear();
+                    curves.clear();
+                    tiles.clear();
+                    path.append_to(&mut paints, &mut curves, &mut tiles);
                     let mut hasher = item_hasher(2);
-                    hash_bytes(&mut hasher, &path.bounds);
-                    hash_bytes(&mut hasher, &path.content_mask.bounds);
-                    hash_bytes(&mut hasher, &path.color);
-                    hasher.write_usize(path.vertices.len());
-                    for vertex in &path.vertices {
-                        hash_bytes(&mut hasher, &vertex.xy_position);
-                        hash_bytes(&mut hasher, &vertex.st_position);
-                        hash_bytes(&mut hasher, &vertex.content_mask.bounds);
+                    hash_bytes(&mut hasher, &path.painted_bounds());
+                    for paint in &paints {
+                        hash_bytes(&mut hasher, paint);
+                    }
+                    hasher.write_usize(curves.len());
+                    for curve in &curves {
+                        hash_bytes(&mut hasher, curve);
+                    }
+                    hasher.write_usize(tiles.len());
+                    for tile in &tiles {
+                        hash_bytes(&mut hasher, tile);
                     }
                     items.push(Item {
                         hash: hasher.finish(),
-                        area: Some(clipped(path.bounds, path.content_mask.bounds, 0.)),
+                        area: Some(clipped(
+                            path.painted_bounds(),
+                            path.content_mask().bounds,
+                            0.,
+                        )),
                     });
                 }
             }
@@ -268,6 +282,8 @@ fn summarize_into(scene: &Scene, frame: u64, items: &mut Vec<Item>) {
                     });
                 }
             }
+            // Native views are composited by the platform, over the frame: they draw no pixels here.
+            PrimitiveBatch::NativeViews(_) => {}
             PrimitiveBatch::Surfaces(range) => {
                 for surface in &scene.surfaces[range] {
                     // A surface's content changes without the scene saying so.

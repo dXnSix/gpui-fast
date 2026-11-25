@@ -48,7 +48,7 @@ fn quad(x: f32, y: f32, width: f32, height: f32, hue: f32) -> Quad {
 fn glyph(x: f32, y: f32) -> MonochromeSprite {
     MonochromeSprite {
         order: 0,
-        pad: 0,
+        animation: Default::default(),
         tile: AtlasTile {
             texture_id: AtlasTextureId {
                 index: 0,
